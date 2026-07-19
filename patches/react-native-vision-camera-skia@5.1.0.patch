@@ -1,0 +1,207 @@
+diff --git a/lib/views/SkiaCamera.d.ts b/lib/views/SkiaCamera.d.ts
+index e2a97120e59b826693d327f736821d3c29b0ed9b..ba146b5df1c48794ff1e24aa8ad6667fb4911db2 100644
+--- a/lib/views/SkiaCamera.d.ts
++++ b/lib/views/SkiaCamera.d.ts
+@@ -1,6 +1,6 @@
+ import { type CanvasProps, type SkImage } from '@shopify/react-native-skia';
+ import React from 'react';
+-import { type CameraController, type CameraProps, type FocusOptions, type Frame, type Point, type TargetVideoPixelFormat } from 'react-native-vision-camera';
++import { type CameraController, type CameraProps, type FocusOptions, type Frame, type Point, type TargetVideoPixelFormat, type TorchMode } from 'react-native-vision-camera';
+ import { type SkiaOnFrameState } from '../render';
+ /**
+  * A reference to a {@linkcode SkiaCamera}.
+@@ -33,7 +33,7 @@ import { type SkiaOnFrameState } from '../render';
+  * }
+  * ```
+  */
+-export interface SkiaCameraRef extends Pick<CameraController, 'resetFocus'> {
++export interface SkiaCameraRef extends Pick<CameraController, 'resetFocus' | 'setTorchMode'> {
+     /**
+      * Focuses the Camera pipeline to the specified {@linkcode viewPoint}
+      * relative to the Camera Skia view's coordiante system,
+@@ -72,6 +72,11 @@ export interface SkiaCameraProps extends CameraProps, Pick<CanvasProps, 'style'>
+      * @see {@linkcode SkiaCameraRef}
+      */
+     ref?: React.Ref<SkiaCameraRef>;
++    /**
++     * Sets the continuous camera torch mode.
++     * @default 'off'
++     */
++    torchMode?: TorchMode;
+     /**
+      * Called on every Frame with the current state.
+      *
+diff --git a/lib/views/SkiaCamera.js b/lib/views/SkiaCamera.js
+index a3595a09a20358383762b9858f6dc1eb969fe90c..f0ba5278125eaf51aa6a06686d61cb14665eeb9b 100644
+--- a/lib/views/SkiaCamera.js
++++ b/lib/views/SkiaCamera.js
+@@ -1,5 +1,5 @@
+ import { Canvas, Image, } from '@shopify/react-native-skia';
+-import React, { useCallback, useEffect, useImperativeHandle, useMemo, } from 'react';
++import React, { useCallback, useEffect, useImperativeHandle, useMemo, useRef, } from 'react';
+ import { Platform } from 'react-native';
+ import { useDerivedValue, useSharedValue } from 'react-native-reanimated';
+ import { useCamera, useFrameOutput, useOrientation, VisionCamera, } from 'react-native-vision-camera';
+@@ -11,7 +11,7 @@ const DEFAULT_PIXEL_FORMAT = Platform.select({
+     ios: 'yuv',
+     android: 'native',
+ });
+-function SkiaCameraImpl({ ref, style, outputs = [], onFrame, pixelFormat = DEFAULT_PIXEL_FORMAT, enablePhysicalBufferRotation, enablePreviewSizedOutputBuffers, device, orientationSource, warnIfRenderSkipped = true, ...props }) {
++function SkiaCameraImpl({ ref, style, outputs = [], onFrame, pixelFormat = DEFAULT_PIXEL_FORMAT, enablePhysicalBufferRotation, enablePreviewSizedOutputBuffers, device, orientationSource, warnIfRenderSkipped = true, torchMode, onStarted, ...props }) {
+     const texture = useSharedValue(null);
+     const lastFrameOrientation = useMemo(() => createSynchronizable(undefined), []);
+     const lastFrameIsMirrored = useMemo(() => createSynchronizable(undefined), []);
+@@ -79,13 +79,37 @@ function SkiaCameraImpl({ ref, style, outputs = [], onFrame, pixelFormat = DEFAU
+     const isFront = typeof device === 'string'
+         ? device === 'front'
+         : device.position === 'front';
++    const cameraControllerRef = useRef(undefined);
++    const handleStarted = useCallback(() => {
++        const controller = cameraControllerRef.current;
++        if (controller != null && torchMode != null) {
++            controller.setTorchMode(torchMode).catch((error) => {
++                console.error(`Failed to update Camera torch after start: ${error}`);
++            });
++        }
++        onStarted?.();
++    }, [onStarted, torchMode]);
+     const camera = useCamera({
+         ...props,
+         orientationSource: 'custom',
+         outputs: [...outputs, frameOutput],
+         device: device,
+         mirrorMode: isFront ? 'on' : 'auto',
++        onStarted: handleStarted,
+     });
++    cameraControllerRef.current = camera;
++    useEffect(() => {
++        if (camera == null || torchMode == null)
++            return;
++        camera.setTorchMode(torchMode).catch((error) => {
++            console.error(`Failed to update Camera torch: ${error}`);
++        });
++    }, [camera, torchMode]);
++    useEffect(() => {
++        return () => {
++            camera?.setTorchMode('off').catch(() => { });
++        };
++    }, [camera]);
+     // Update output orientations (skia frame output is treated differently)
+     const orientationSourceOrUndefined = orientationSource === 'custom' ? undefined : orientationSource;
+     const otherOutputsOrientation = useOrientation(orientationSourceOrUndefined) ?? 'up';
+@@ -136,6 +160,12 @@ function SkiaCameraImpl({ ref, style, outputs = [], onFrame, pixelFormat = DEFAU
+             }
+             return await camera.resetFocus();
+         },
++        async setTorchMode(mode) {
++            if (camera == null) {
++                throw new Error(`Cannot update torch - Camera is null!`);
++            }
++            return await camera.setTorchMode(mode);
++        },
+         takeSnapshot() {
+             const snapshot = texture.get();
+             const cpuImage = snapshot?.makeNonTextureImage();
+diff --git a/src/views/SkiaCamera.tsx b/src/views/SkiaCamera.tsx
+index d618123c5e8b4edde0bf68ab822dffeb361cf0a0..5d6fdd0ef5d9b2f7e2fc26a318e76dadfc2649d4 100644
+--- a/src/views/SkiaCamera.tsx
++++ b/src/views/SkiaCamera.tsx
+@@ -10,6 +10,7 @@ import React, {
+   useEffect,
+   useImperativeHandle,
+   useMemo,
++  useRef,
+ } from 'react'
+ import { Platform } from 'react-native'
+ import { useDerivedValue, useSharedValue } from 'react-native-reanimated'
+@@ -29,6 +30,7 @@ import {
+   type Point,
+   type ResolutionBiasConstraint,
+   type TargetVideoPixelFormat,
++  type TorchMode,
+   useCamera,
+   useFrameOutput,
+   useOrientation,
+@@ -71,7 +73,8 @@ import { transformPoint } from '../transformPoint'
+  * }
+  * ```
+  */
+-export interface SkiaCameraRef extends Pick<CameraController, 'resetFocus'> {
++export interface SkiaCameraRef
++  extends Pick<CameraController, 'resetFocus' | 'setTorchMode'> {
+   /**
+    * Focuses the Camera pipeline to the specified {@linkcode viewPoint}
+    * relative to the Camera Skia view's coordiante system,
+@@ -114,6 +117,11 @@ export interface SkiaCameraProps
+    * @see {@linkcode SkiaCameraRef}
+    */
+   ref?: React.Ref<SkiaCameraRef>
++  /**
++   * Sets the continuous camera torch mode.
++   * @default 'off'
++   */
++  torchMode?: TorchMode
+   /**
+    * Called on every Frame with the current state.
+    *
+@@ -213,6 +221,8 @@ function SkiaCameraImpl({
+   device,
+   orientationSource,
+   warnIfRenderSkipped = true,
++  torchMode,
++  onStarted,
+   ...props
+ }: SkiaCameraProps): React.ReactElement {
+   const texture = useSharedValue<SkImage | null>(null)
+@@ -303,13 +313,38 @@ function SkiaCameraImpl({
+     typeof device === 'string'
+       ? device === 'front'
+       : device.position === 'front'
++  const cameraControllerRef = useRef<CameraController | undefined>(undefined)
++  const handleStarted = useCallback(() => {
++    const controller = cameraControllerRef.current
++    if (controller != null && torchMode != null) {
++      controller.setTorchMode(torchMode).catch((error) => {
++        console.error(`Failed to update Camera torch after start: ${error}`)
++      })
++    }
++    onStarted?.()
++  }, [onStarted, torchMode])
+   const camera = useCamera({
+     ...props,
+     orientationSource: 'custom',
+     outputs: [...outputs, frameOutput],
+     device: device,
+     mirrorMode: isFront ? 'on' : 'auto',
++    onStarted: handleStarted,
+   })
++  cameraControllerRef.current = camera
++
++  useEffect(() => {
++    if (camera == null || torchMode == null) return
++    camera.setTorchMode(torchMode).catch((error) => {
++      console.error(`Failed to update Camera torch: ${error}`)
++    })
++  }, [camera, torchMode])
++
++  useEffect(() => {
++    return () => {
++      camera?.setTorchMode('off').catch(() => {})
++    }
++  }, [camera])
+ 
+   // Update output orientations (skia frame output is treated differently)
+   const orientationSourceOrUndefined =
+@@ -367,6 +402,12 @@ function SkiaCameraImpl({
+       }
+       return await camera.resetFocus()
+     },
++    async setTorchMode(mode) {
++      if (camera == null) {
++        throw new Error(`Cannot update torch - Camera is null!`)
++      }
++      return await camera.setTorchMode(mode)
++    },
+     takeSnapshot() {
+       const snapshot = texture.get()
+       const cpuImage = snapshot?.makeNonTextureImage()

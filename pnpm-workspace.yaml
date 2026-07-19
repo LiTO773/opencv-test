@@ -1,0 +1,2 @@
+patchedDependencies:
+  react-native-vision-camera-skia@5.1.0: patches/react-native-vision-camera-skia@5.1.0.patch

@@ -1,16 +1,23 @@
 {
   "expo": {
-    "name": "opencv-test",
-    "slug": "opencv-test",
+    "name": "Document Detector",
+    "slug": "document-detector",
     "version": "1.0.0",
+    "platforms": ["ios", "android"],
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
     "scheme": "opencvtest",
     "userInterfaceStyle": "automatic",
     "ios": {
-      "icon": "./assets/expo.icon"
+      "icon": "./assets/expo.icon",
+      "bundleIdentifier": "com.likewise6512.opencv-test",
+      "appleTeamId": "R6BGR4JJPZ",
+      "infoPlist": {
+        "NSCameraUsageDescription": "This app uses the camera to scan documents."
+      }
     },
     "android": {
+      "permissions": ["android.permission.CAMERA"],
       "adaptiveIcon": {
         "backgroundColor": "#E6F4FE",
         "foregroundImage": "./assets/images/android-icon-foreground.png",
@@ -18,10 +25,6 @@
         "monochromeImage": "./assets/images/android-icon-monochrome.png"
       },
       "predictiveBackGestureEnabled": false
-    },
-    "web": {
-      "output": "static",
-      "favicon": "./assets/images/favicon.png"
     },
     "plugins": [
       "expo-router",
