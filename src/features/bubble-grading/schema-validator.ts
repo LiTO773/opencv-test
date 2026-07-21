@@ -178,7 +178,7 @@ function resolveImageDimensions(
       errors,
       'canonicalImage.dimensions',
       'image_dimension_mismatch',
-      `declares ${resolved.width}x${resolved.height}px but input.jpg is ${inputImage.width}x${inputImage.height}px.`,
+      `declares ${resolved.width}x${resolved.height}px but the supplied canonical image is ${inputImage.width}x${inputImage.height}px.`,
     );
   }
   return resolved;

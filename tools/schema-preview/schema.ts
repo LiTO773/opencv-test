@@ -1,11 +1,10 @@
-import type { BubbleGradingSchema } from "../../src/features/bubble-grading/schema";
+import { CANONICAL_CROP_CONTRACT } from '../../src/features/bubble-grading/canonical-crop-contract';
+import type { BubbleGradingSchema } from '../../src/features/bubble-grading/schema';
 
 /**
  * Fixed generator handoff. Replace this object and input.jpg, then keep
- * `pnpm schema:preview --watch` running while coordinates are refined.
- *
- * Canonical dimensions are deliberately unresolved until the crop contract is
- * locked. In this state only the workbench may resolve them from input.jpg.
+ * `pnpm schema:preview --watch` running while coordinates are refined. The
+ * prototype app imports this same hardcoded schema so the contracts cannot drift.
  */
 export const schema: BubbleGradingSchema = {
   formatVersion: 1,
@@ -18,10 +17,10 @@ export const schema: BubbleGradingSchema = {
     origin: "top-left",
     dimensions: {
       status: "fixed",
-      widthPx: 875,
-      heightPx: 1280,
+      widthPx: CANONICAL_CROP_CONTRACT.widthPx,
+      heightPx: CANONICAL_CROP_CONTRACT.heightPx,
     },
-    pixelsPerMillimeter: 4,
+    pixelsPerMillimeter: CANONICAL_CROP_CONTRACT.pixelsPerMillimeter,
   },
   qrRegionPx: {
     x: 700,

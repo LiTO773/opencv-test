@@ -1,6 +1,7 @@
 import { File, Paths } from 'expo-file-system';
 import { Share } from 'react-native';
 
+import { assertHardcodedSchemaImageContract } from '@/features/bubble-grading/hardcoded-schema-contract';
 import { readQrPayloadId } from '@/features/four-point/qr-reader';
 import type { FourPointScan } from '@/features/four-point/types';
 
@@ -23,6 +24,8 @@ export function cleanScanFileName(scan: FourPointScan, now = new Date()) {
 }
 
 export async function shareCleanScan(scan: FourPointScan) {
+  assertHardcodedSchemaImageContract({ width: scan.width, height: scan.height });
+
   const match = /^data:image\/jpeg;base64,(.+)$/s.exec(scan.imageUri);
   if (!match) throw new Error('A imagem limpa não está disponível como JPEG.');
 

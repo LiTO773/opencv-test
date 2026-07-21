@@ -6,10 +6,53 @@ import test from 'node:test';
 
 import sharp from 'sharp';
 
+import {
+  CANONICAL_CROP_ASPECT_RATIO,
+  CANONICAL_CROP_CONTRACT,
+} from '../../src/features/bubble-grading/canonical-crop-contract';
+import {
+  assertHardcodedSchemaImageContract,
+  CanonicalCropContractError,
+} from '../../src/features/bubble-grading/hardcoded-schema-contract';
+import { hardcodedBubbleGradingSchema } from '../../src/features/bubble-grading/hardcoded-schema';
 import { validateBubbleGradingSchema } from '../../src/features/bubble-grading/schema-validator';
 import { multipleErrorsSchemaFixture } from './fixtures/multiple-errors-schema';
 import { validSchemaFixture } from './fixtures/valid-schema';
 import { buildOverlaySvg, generatePreview } from './preview-renderer';
+
+test('locks the app schema to the user-reviewed canonical crop', () => {
+  assert.deepEqual(hardcodedBubbleGradingSchema.canonicalImage.dimensions, {
+    status: 'fixed',
+    widthPx: 875,
+    heightPx: 1280,
+  });
+  assert.deepEqual(CANONICAL_CROP_CONTRACT, {
+    widthPx: 875,
+    heightPx: 1280,
+    pixelsPerMillimeter: 4,
+  });
+  assert.equal(CANONICAL_CROP_ASPECT_RATIO, 875 / 1280);
+});
+
+test('accepts only images that match the hardcoded app schema dimensions', () => {
+  assert.doesNotThrow(() =>
+    assertHardcodedSchemaImageContract({
+      width: CANONICAL_CROP_CONTRACT.widthPx,
+      height: CANONICAL_CROP_CONTRACT.heightPx,
+    }),
+  );
+
+  assert.throws(
+    () => assertHardcodedSchemaImageContract({ width: 876, height: 1280 }),
+    (error: unknown) => {
+      assert.ok(error instanceof CanonicalCropContractError);
+      assert.equal(error.code, 'canonical_crop_contract_error');
+      assert.match(error.message, /875x1280px/);
+      assert.match(error.message, /876x1280px/);
+      return true;
+    },
+  );
+});
 
 test('accepts a complete canonical-pixel schema', () => {
   const result = validateBubbleGradingSchema(validSchemaFixture, {

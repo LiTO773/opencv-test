@@ -4,13 +4,13 @@ A mobile-only Expo SDK 57 prototype that detects a marked A4 document directly i
 
 Each valid page has three evenly spaced black squares in each vertical margin. Sampled preview frames are resized on the GPU, converted into an adaptive binary image, and searched for square contours. A page is considered ready only when six candidates form two aligned, evenly spaced triplets, the detected corners remain within a small movement tolerance for five analyzed frames, and a Laplacian-based score says the central answer area is sharp. The preview coordinates are never reused for the final crop. Once ready, the app captures a QHD still photograph, applies its physical orientation, and detects the six markers and sharpness again on that exact photograph. A failed final quality check automatically returns to scanning.
 
-The inward-facing corners detected in the accepted still photograph create a perspective- and rotation-corrected 840 × 1188 image (four pixels per A4 millimetre). A one-millimetre white edge masks any marker interpolation left at the boundary. The normalized image is then scanned locally for a QR code; JSON payloads are parsed while non-JSON payloads remain available as raw text. An upside-down page is automatically rotated 180 degrees using the QR orientation. The camera pauses while the result and metadata are displayed in a zoomable full-screen modal.
+The inward-facing corners of the four outer markers detected in the accepted still photograph create a perspective- and rotation-corrected 875 × 1280 image. Those user-reviewed dimensions and their aspect ratio are shared by the perspective surface and the hardcoded grading schema; the crop is rendered directly at that size, never normalized by a later resize. Any schema/image dimension mismatch is reported as a canonical-contract error. The normalized image is scanned locally for a QR code, and an upside-down page is automatically rotated 180 degrees using the QR orientation. The camera pauses while the clean JPEG and metadata are displayed in a zoomable full-screen modal.
 
 The QR describes the individual sheet only. Bubble positions and the answer key use the shared schema contract in `src/features/bubble-grading/schema.ts`. All schema layout values use a top-left origin and pixels of the clean canonical crop; the app and OpenCV do not convert PDF units.
 
 ## Preview a grading schema
 
-Put a clean shared scan at `tools/schema-preview/input.jpg`, edit the fixed TypeScript export in `tools/schema-preview/schema.ts`, and run:
+Put a clean 875 × 1280 shared scan at `tools/schema-preview/input.jpg`, edit the fixed TypeScript export in `tools/schema-preview/schema.ts`, and run:
 
 ```bash
 pnpm schema:preview
@@ -22,7 +22,7 @@ This creates `tools/schema-preview/output.png` with bright, question-colored ove
 pnpm schema:preview --watch
 ```
 
-Watch mode stays running and refreshes whenever `input.jpg` or `schema.ts` changes. Invalid schemas print every discovered problem with its schema path and remove stale `output.png`. Until the canonical crop contract is finalized, `canonicalImage.dimensions.status` remains explicitly `unresolved` and the preview uses the actual JPEG dimensions. Once fixed, an input mismatch is rejected instead of resized.
+Watch mode stays running and refreshes whenever `input.jpg` or `schema.ts` changes. Invalid schemas print every discovered problem with its schema path and remove stale `output.png`. The canonical dimensions are fixed at 875 × 1280; an input mismatch is rejected instead of resized.
 
 On devices with a torch, the glass flash control can illuminate the document while scanning. The torch is turned off while the camera is paused for the captured-content modal.
 

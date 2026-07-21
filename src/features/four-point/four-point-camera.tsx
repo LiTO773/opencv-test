@@ -27,6 +27,8 @@ import { useResizer } from 'react-native-vision-camera-resizer';
 import { SkiaCamera, type SkiaCameraRef } from 'react-native-vision-camera-skia';
 import { scheduleOnRN } from 'react-native-worklets';
 
+import { CANONICAL_CROP_CONTRACT } from '@/features/bubble-grading/canonical-crop-contract';
+import { assertHardcodedSchemaImageContract } from '@/features/bubble-grading/hardcoded-schema-contract';
 import {
   createMarkerRegions,
   detectFourPoints,
@@ -39,7 +41,6 @@ import type {
   FourPointScan,
   FourPointScanState,
   MarkerRegion,
-  Point2D,
   QrMetadata,
   Quadrilateral,
 } from '@/features/four-point/types';
@@ -48,11 +49,8 @@ const ANALYSIS_WIDTH = 420;
 const DETECTION_INTERVAL_FRAMES = 2;
 const CONFIRMATION_FRAMES = 2;
 
-// TODO(bubble-grading): Set these together only after the schema workbench
-// establishes the generator-to-crop contract. Phase 01 intentionally preserves
-// the measured crop dimensions instead of guessing canonical dimensions.
-export const CANONICAL_CROP_WIDTH_PX: number | null = null;
-export const CANONICAL_CROP_HEIGHT_PX: number | null = null;
+export const CANONICAL_CROP_WIDTH_PX = CANONICAL_CROP_CONTRACT.widthPx;
+export const CANONICAL_CROP_HEIGHT_PX = CANONICAL_CROP_CONTRACT.heightPx;
 
 const guidePaint = Skia.Paint();
 guidePaint.setStyle(PaintStyle.Stroke);
@@ -134,10 +132,6 @@ function solveHomography(
   ];
 }
 
-function edgeLength(first: Point2D, second: Point2D) {
-  return Math.hypot(first.x - second.x, first.y - second.y);
-}
-
 function readQrFromImage(image: SkImage, width: number, height: number) {
   const pixels = image.readPixels(0, 0, {
     alphaType: AlphaType.Unpremul,
@@ -184,16 +178,8 @@ function normalizeSnapshot(
       snapshot.height(),
     ),
   ) as Quadrilateral;
-  const measuredWidth = Math.max(
-    1,
-    Math.round((edgeLength(source[0], source[1]) + edgeLength(source[3], source[2])) / 2),
-  );
-  const measuredHeight = Math.max(
-    1,
-    Math.round((edgeLength(source[0], source[3]) + edgeLength(source[1], source[2])) / 2),
-  );
-  const outputWidth = CANONICAL_CROP_WIDTH_PX ?? measuredWidth;
-  const outputHeight = CANONICAL_CROP_HEIGHT_PX ?? measuredHeight;
+  const outputWidth = CANONICAL_CROP_WIDTH_PX;
+  const outputHeight = CANONICAL_CROP_HEIGHT_PX;
   const destination: Quadrilateral = [
     { x: 0, y: 0 },
     { x: outputWidth, y: 0 },
@@ -233,6 +219,11 @@ function normalizeSnapshot(
           };
         }
       }
+
+      assertHardcodedSchemaImageContract({
+        width: finalImage.width(),
+        height: finalImage.height(),
+      });
 
       return {
         imageUri: `data:image/jpeg;base64,${finalImage.encodeToBase64(ImageFormat.JPEG, 92)}`,
