@@ -10,10 +10,16 @@ import {
   ThresholdTypes,
 } from 'react-native-fast-opencv';
 
+import { countQrFinderNestingLevels } from '@/features/four-point/contour-hierarchy';
+import {
+  selectBestMarkerLayout,
+  strongestCandidatesAsMatches,
+  type MarkerCandidate,
+  type MarkerCandidateGroups,
+} from '@/features/four-point/four-point-layout';
 import type {
   FourPointAnalysis,
   MarkerMatch,
-  MarkerMatches,
   MarkerRegion,
   Point2D,
   Quadrilateral,
@@ -23,6 +29,9 @@ const PAGE_WIDTH_FRACTION = 0.76;
 const A4_HEIGHT_TO_WIDTH = 297 / 210;
 const REGION_WIDTH_FRACTION = 0.25;
 const MIN_DARKNESS = 145;
+const MAX_MARKER_CANDIDATES_PER_REGION = 4;
+const QR_FINDER_NESTING_LEVELS = 2;
+const SINGLE_NESTING_SCORE_PENALTY = 0.72;
 
 export function createMarkerRegions(
   analysisWidth: number,
@@ -208,12 +217,12 @@ function markerFromPoints(
   };
 }
 
-function findMarkerInRegion(
+function findMarkerCandidatesInRegion(
   source: ReturnType<typeof OpenCV.bufferToMat>,
   channels: 3 | 4,
   conversion: ColorConversionCodes,
   region: MarkerRegion,
-) {
+): MarkerCandidate[] {
   'worklet';
   const colorRegion = OpenCV.createObject(
     ObjectType.Mat,
@@ -262,18 +271,26 @@ function findMarkerInRegion(
   );
 
   const contours = OpenCV.createObject(ObjectType.PointVectorOfVectors);
+  const hierarchy = OpenCV.createObject(ObjectType.Mat, 1, 1, DataTypes.CV_32SC4);
   OpenCV.invoke(
-    'findContours',
+    'findContoursWithHierarchy',
     thresholded,
     contours,
-    RetrievalModes.RETR_LIST,
+    hierarchy,
+    RetrievalModes.RETR_TREE,
     ContourApproximationModes.CHAIN_APPROX_SIMPLE,
   );
 
   const contourCount = OpenCV.toJSValue(contours).array.length;
-  let bestMarker: MarkerMatch | null = null;
-  let bestScore = 0;
+  const hierarchyData = OpenCV.matToBuffer(hierarchy, 'int32').buffer;
+  const candidates: MarkerCandidate[] = [];
   for (let index = 0; index < contourCount; index += 1) {
+    // QR finder patterns are black/white/black nested squares. A filled page
+    // marker has no such two-level family, so discard the QR family before its
+    // individually excellent square contours can compete with real markers.
+    const qrFinderNestingLevels = countQrFinderNestingLevels(hierarchyData, index);
+    if (qrFinderNestingLevels >= QR_FINDER_NESTING_LEVELS) continue;
+
     const contour = OpenCV.copyObjectFromVector(contours, index);
     const contourArea = OpenCV.invoke('contourArea', contour, false).value;
     if (contourArea < 14 || contourArea > region.width * region.height * 0.14) continue;
@@ -286,58 +303,37 @@ function findMarkerInRegion(
       grayscaleRegion,
       region,
     );
-    if (candidate && candidate.score > bestScore) {
-      bestMarker = candidate.marker;
-      bestScore = candidate.score;
+    if (candidate) {
+      candidates.push({
+        marker: candidate.marker,
+        appearanceScore:
+          candidate.score *
+          (qrFinderNestingLevels === 1 ? SINGLE_NESTING_SCORE_PENALTY : 1),
+        qrFinderNestingLevels,
+      });
     }
   }
-  return bestMarker;
-}
-
-function markerFreeCropQuadrilateral(markers: MarkerMatches): Quadrilateral | null {
-  'worklet';
-  const [topLeft, topRight, bottomRight, bottomLeft] = markers;
-  if (!topLeft || !topRight || !bottomRight || !bottomLeft) return null;
-
-  // Marker corners are ordered top-left, top-right, bottom-right, bottom-left.
-  // Use the inward-facing corners so both complete marker columns are excluded,
-  // while the top and bottom marker edges retain the intended vertical span.
-  return [
-    topLeft.corners[1],
-    topRight.corners[0],
-    bottomRight.corners[3],
-    bottomLeft.corners[2],
-  ];
-}
-
-function isPlausiblePortraitLayout(markers: MarkerMatches, crop: Quadrilateral) {
-  'worklet';
-  const [topLeft, topRight, bottomRight, bottomLeft] = markers;
-  if (!topLeft || !topRight || !bottomRight || !bottomLeft) return false;
-  if (!isConvexQuadrilateral(crop)) return false;
-
-  if (
-    topRight.center.x <= topLeft.center.x ||
-    bottomRight.center.x <= bottomLeft.center.x ||
-    bottomLeft.center.y <= topLeft.center.y ||
-    bottomRight.center.y <= topRight.center.y
-  ) {
-    return false;
+  candidates.sort((first, second) => second.appearanceScore - first.appearanceScore);
+  const distinctCandidates: MarkerCandidate[] = [];
+  for (const candidate of candidates) {
+    let duplicatesExistingShape = false;
+    for (const existing of distinctCandidates) {
+      const duplicateCenterTolerance = Math.max(
+        4,
+        Math.min(candidate.marker.size, existing.marker.size) * 0.5,
+      );
+      if (distance(candidate.marker.center, existing.marker.center) <= duplicateCenterTolerance) {
+        duplicatesExistingShape = true;
+        break;
+      }
+    }
+    if (!duplicatesExistingShape) distinctCandidates.push(candidate);
+    if (distinctCandidates.length >= MAX_MARKER_CANDIDATES_PER_REGION) break;
   }
-
-  const widths = [distance(topLeft.center, topRight.center), distance(bottomLeft.center, bottomRight.center)];
-  const heights = [distance(topLeft.center, bottomLeft.center), distance(topRight.center, bottomRight.center)];
-  const widthBalance = Math.min(...widths) / Math.max(...widths);
-  const heightBalance = Math.min(...heights) / Math.max(...heights);
-  if (widthBalance < 0.45 || heightBalance < 0.45) return false;
-
-  const averageWidth = (widths[0] + widths[1]) / 2;
-  const averageHeight = (heights[0] + heights[1]) / 2;
-  const aspectRatio = averageWidth / averageHeight;
-  if (aspectRatio < 0.46 || aspectRatio > 0.92) return false;
-
-  const sizes = [topLeft.size, topRight.size, bottomRight.size, bottomLeft.size];
-  return Math.min(...sizes) / Math.max(...sizes) >= 0.28;
+  // Nested boundaries often generate several contours for the same physical
+  // square. De-duplicating them ensures the retained slots contain genuinely
+  // different marker/QR hypotheses for whole-page selection.
+  return distinctCandidates;
 }
 
 function analyzePixels(
@@ -358,16 +354,28 @@ function analyzePixels(
       new Uint8Array(pixelBuffer),
     );
 
-    const markers: MarkerMatches = [null, null, null, null];
+    const candidateGroups: [
+      MarkerCandidate[],
+      MarkerCandidate[],
+      MarkerCandidate[],
+      MarkerCandidate[],
+    ] = [[], [], [], []];
     for (let index = 0; index < 4; index += 1) {
-      markers[index] = findMarkerInRegion(source, channels, conversion, regions[index]);
+      candidateGroups[index] = findMarkerCandidatesInRegion(
+        source,
+        channels,
+        conversion,
+        regions[index],
+      );
     }
+    const groupedCandidates: MarkerCandidateGroups = candidateGroups;
+    const selectedLayout = selectBestMarkerLayout(groupedCandidates, regions);
+    const markers = selectedLayout?.markers ?? strongestCandidatesAsMatches(groupedCandidates);
     const matchedCount = markers.reduce((count, marker) => count + (marker ? 1 : 0), 0);
-    const crop = markerFreeCropQuadrilateral(markers);
     return {
       markers,
       matchedCount,
-      cropQuadrilateral: crop && isPlausiblePortraitLayout(markers, crop) ? crop : null,
+      cropQuadrilateral: selectedLayout?.cropQuadrilateral ?? null,
     };
   } finally {
     OpenCV.clearBuffers();

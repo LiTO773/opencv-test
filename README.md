@@ -38,6 +38,18 @@ On devices with a torch, the glass flash control can illuminate the document whi
 
 All image processing stays on the device. There is no web target, server, upload, or browser fallback.
 
+### QR finder-pattern protection
+
+The active four-point scanner deliberately prevents the metadata QR from being
+mistaken for a page marker. OpenCV retrieves the full contour hierarchy and
+rejects the QR finder pattern's nested black/white/black square family. The
+scanner then retains several plausible squares in every corner region and
+selects the four that form the strongest complete portrait-page layout, with an
+additional penalty for barcode candidates displaced inward from the real outer
+markers. These are complementary safeguards: hierarchy recognizes why a square
+is QR-like, while whole-page scoring prevents any one corner from deciding the
+crop independently.
+
 ## Run
 
 This app cannot run in Expo Go because the camera, OpenCV, Skia, Nitro, and worklet packages contain native code. After native dependencies are installed, launch a development build on a physical device:
@@ -57,4 +69,4 @@ pnpm lint
 pnpm schema:test
 ```
 
-Static checks do not validate the native JSI/worklet boundary. Before production, test on representative iOS and Android hardware with varied page sizes, backgrounds, lighting, shadows, glare, and camera orientations. Marker thresholds live in `src/features/document-scanner/document-detection.ts`; stability and sharpness thresholds live near the top of `src/features/document-scanner/document-camera.tsx`.
+Static checks do not validate the native JSI/worklet boundary. Before production, test on representative iOS and Android hardware with varied page sizes, backgrounds, lighting, shadows, glare, and camera orientations. Active four-point marker thresholds and QR hierarchy filtering live in `src/features/four-point/four-point-detection.ts`; pure whole-page candidate scoring lives in `src/features/four-point/four-point-layout.ts`.
