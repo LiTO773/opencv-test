@@ -11,6 +11,7 @@ const WORKBENCH_DIRECTORY = dirname(fileURLToPath(import.meta.url));
 const INPUT_PATH = fileURLToPath(new URL('./input.jpg', import.meta.url));
 const SCHEMA_PATH = fileURLToPath(new URL('./schema.ts', import.meta.url));
 const OUTPUT_PATH = fileURLToPath(new URL('./output.png', import.meta.url));
+const RESULT_PATH = fileURLToPath(new URL('./result.json', import.meta.url));
 const WATCHED_FILES = new Set([basename(INPUT_PATH), basename(SCHEMA_PATH)]);
 let schemaLoadSequence = 0;
 
@@ -30,24 +31,26 @@ async function loadSchema() {
   }
 }
 
-async function removeStaleOutput() {
-  await unlink(OUTPUT_PATH).catch((error: NodeJS.ErrnoException) => {
-    if (error.code !== 'ENOENT') throw error;
-  });
+async function removeStaleOutputs() {
+  for (const path of [OUTPUT_PATH, RESULT_PATH]) {
+    await unlink(path).catch((error: NodeJS.ErrnoException) => {
+      if (error.code !== 'ENOENT') throw error;
+    });
+  }
 }
 
 async function regenerate() {
   try {
     const schema = await loadSchema();
-    const result = await generatePreview(schema, INPUT_PATH, OUTPUT_PATH);
+    const result = await generatePreview(schema, INPUT_PATH, OUTPUT_PATH, RESULT_PATH);
     console.log(
-      `[schema:preview] Created ${OUTPUT_PATH} · ${result.questionCount} questions · ${result.bubbleCount} bubbles · ${result.width}×${result.height}px`,
+      `[schema:preview] Created ${OUTPUT_PATH} and ${RESULT_PATH} · ${result.questionCount} questions · ${result.bubbleCount} bubbles · ${result.width}×${result.height}px`,
     );
     return true;
   } catch (error) {
-    await removeStaleOutput();
+    await removeStaleOutputs();
     console.error(`[schema:preview] ${error instanceof Error ? error.message : String(error)}`);
-    console.error('[schema:preview] output.png was removed so a stale preview cannot be mistaken for this schema.');
+    console.error('[schema:preview] output.png and result.json were removed so stale diagnostics cannot be mistaken for this schema.');
     return false;
   }
 }
@@ -86,7 +89,7 @@ async function main() {
   const unexpectedArguments = argumentsAfterScript.filter((argument) => argument !== '--watch');
 
   if (unexpectedArguments.length > 0) {
-    console.error('[schema:preview] This workbench uses fixed input.jpg, schema.ts, and output.png paths; positional arguments are not supported.');
+    console.error('[schema:preview] This workbench uses fixed input.jpg, schema.ts, output.png, and result.json paths; positional arguments are not supported.');
     process.exitCode = 1;
   } else if (watchMode) {
     startWatchMode();

@@ -41,6 +41,7 @@ example
 # Local schema workbench artifacts (shared scans may contain student data)
 /tools/schema-preview/input.jpg
 /tools/schema-preview/output.png
+/tools/schema-preview/result.json
 
 # generated native folders
 /ios

@@ -12,6 +12,12 @@ export const validSchemaFixture: BubbleGradingSchema = {
   qrRegionPx: { x: 24, y: 24, width: 96, height: 96 },
   bubbleStyle: {
     radiusPx: 12,
+    printedOutlineWidthPx: 2,
+    roiRadiusPx: 22,
+    fillRadiusPx: 8,
+    backgroundRingInnerRadiusPx: 15,
+    backgroundRingOuterRadiusPx: 19,
+    centerSearchTolerancePx: 3,
   },
   questions: [
     {

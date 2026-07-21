@@ -234,20 +234,80 @@ function validateRectangle(
 
 function validateBubbleStyle(value: unknown, errors: SchemaValidationError[]): BubbleStyle | null {
   if (!isRecord(value)) {
-    addError(errors, 'bubbleStyle', 'required_object', 'must declare the global bubble radius.');
+    addError(errors, 'bubbleStyle', 'required_object', 'must declare the global measurement geometry.');
     return null;
   }
 
-  if (!isPositiveNumber(value.radiusPx)) {
+  const positiveRadiusProperties = [
+    'radiusPx',
+    'printedOutlineWidthPx',
+    'roiRadiusPx',
+    'fillRadiusPx',
+    'backgroundRingInnerRadiusPx',
+    'backgroundRingOuterRadiusPx',
+  ] as const;
+  let valid = true;
+  for (const property of positiveRadiusProperties) {
+    if (!isPositiveNumber(value[property])) {
+      addError(
+        errors,
+        `bubbleStyle.${property}`,
+        'invalid_radius',
+        'must be a positive number of canonical pixels.',
+      );
+      valid = false;
+    }
+  }
+  if (!isFiniteNumber(value.centerSearchTolerancePx) || value.centerSearchTolerancePx < 0) {
     addError(
       errors,
-      'bubbleStyle.radiusPx',
-      'invalid_radius',
-      'must be a positive number of canonical pixels.',
+      'bubbleStyle.centerSearchTolerancePx',
+      'invalid_search_tolerance',
+      'must be a non-negative number of canonical pixels.',
     );
-    return null;
+    valid = false;
   }
-  return { radiusPx: value.radiusPx };
+  if (!valid) return null;
+
+  const style = value as BubbleStyle;
+  const outlineInnerEdge = style.radiusPx - style.printedOutlineWidthPx / 2;
+  const outlineOuterEdge = style.radiusPx + style.printedOutlineWidthPx / 2;
+  if (style.fillRadiusPx >= outlineInnerEdge) {
+    addError(
+      errors,
+      'bubbleStyle.fillRadiusPx',
+      'invalid_radius_order',
+      'must end before the inner edge of the permanently printed outline.',
+    );
+  }
+  if (style.backgroundRingInnerRadiusPx <= outlineOuterEdge) {
+    addError(
+      errors,
+      'bubbleStyle.backgroundRingInnerRadiusPx',
+      'invalid_radius_order',
+      'must begin outside the permanently printed outline.',
+    );
+  }
+  if (style.backgroundRingOuterRadiusPx <= style.backgroundRingInnerRadiusPx) {
+    addError(
+      errors,
+      'bubbleStyle.backgroundRingOuterRadiusPx',
+      'invalid_radius_order',
+      'must be greater than backgroundRingInnerRadiusPx.',
+    );
+  }
+  if (
+    style.roiRadiusPx <
+    style.backgroundRingOuterRadiusPx + style.centerSearchTolerancePx
+  ) {
+    addError(
+      errors,
+      'bubbleStyle.roiRadiusPx',
+      'invalid_radius_order',
+      'must contain the complete background ring at every permitted center adjustment.',
+    );
+  }
+  return style;
 }
 
 export function validateBubbleGradingSchema(
@@ -379,16 +439,16 @@ export function validateBubbleGradingSchema(
           if (
             imageDimensions &&
             bubbleStyle &&
-            (center.x - bubbleStyle.radiusPx < 0 ||
-              center.y - bubbleStyle.radiusPx < 0 ||
-              center.x + bubbleStyle.radiusPx > imageDimensions.width ||
-              center.y + bubbleStyle.radiusPx > imageDimensions.height)
+            (center.x - bubbleStyle.roiRadiusPx < 0 ||
+              center.y - bubbleStyle.roiRadiusPx < 0 ||
+              center.x + bubbleStyle.roiRadiusPx > imageDimensions.width ||
+              center.y + bubbleStyle.roiRadiusPx > imageDimensions.height)
           ) {
             addError(
               errors,
               `${bubblePath}.centerPx`,
               'bubble_out_of_bounds',
-              `the complete ${bubbleStyle.radiusPx}px-radius circle must fit inside the ${imageDimensions.width}x${imageDimensions.height}px canonical image.`,
+              `the complete ${bubbleStyle.roiRadiusPx}px-radius measurement ROI must fit inside the ${imageDimensions.width}x${imageDimensions.height}px canonical image.`,
             );
           }
         });
@@ -421,6 +481,39 @@ export function validateBubbleGradingSchema(
         });
       }
     });
+
+    if (imageDimensions && bubbleStyle) {
+      const bubbles = candidate.questions.flatMap((questionValue, questionIndex) => {
+        if (!isRecord(questionValue) || !Array.isArray(questionValue.bubbles)) return [];
+        return questionValue.bubbles.flatMap((bubbleValue, bubbleIndex) => {
+          if (!isRecord(bubbleValue)) return [];
+          const center = pointFrom(bubbleValue.centerPx);
+          if (!center) return [];
+          return [{
+            center,
+            path: `questions[${questionIndex}].bubbles[${bubbleIndex}].centerPx`,
+          }];
+        });
+      });
+      for (let firstIndex = 0; firstIndex < bubbles.length; firstIndex += 1) {
+        for (let secondIndex = firstIndex + 1; secondIndex < bubbles.length; secondIndex += 1) {
+          const first = bubbles[firstIndex];
+          const second = bubbles[secondIndex];
+          const distance = Math.hypot(
+            first.center.x - second.center.x,
+            first.center.y - second.center.y,
+          );
+          if (distance < bubbleStyle.roiRadiusPx * 2) {
+            addError(
+              errors,
+              second.path,
+              'overlapping_measurement_regions',
+              `its measurement ROI overlaps ${first.path}.`,
+            );
+          }
+        }
+      }
+    }
 
   }
 

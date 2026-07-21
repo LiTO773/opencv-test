@@ -34,7 +34,18 @@ export type CanonicalImageMetadata = {
 };
 
 export type BubbleStyle = {
+  /** Radius of the printed bubble circumference. */
   radiusPx: number;
+  printedOutlineWidthPx: number;
+  /** Complete patch visited by the detector around the declared center. */
+  roiRadiusPx: number;
+  /** Interior disk used for fill measurements; excludes the printed outline. */
+  fillRadiusPx: number;
+  /** Annulus guaranteed by the generator to contain clear local paper. */
+  backgroundRingInnerRadiusPx: number;
+  backgroundRingOuterRadiusPx: number;
+  /** Maximum local center adjustment; never a whole-page circle search. */
+  centerSearchTolerancePx: number;
 };
 
 export type BubbleSchema = {

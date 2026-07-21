@@ -16,13 +16,17 @@ Put a clean 875 × 1280 shared scan at `tools/schema-preview/input.jpg`, edit th
 pnpm schema:preview
 ```
 
-This creates `tools/schema-preview/output.png` with bright, question-colored overlays for the QR region, bubble circles, centers, labels, source pixel coordinates, radii, and correct answers. Crop anchors are intentionally absent because `input.jpg` is already the marker-free crop.
+This creates `tools/schema-preview/output.png` with bright measurement and decision overlays for the QR region and every expected bubble. Crop anchors are intentionally absent because `input.jpg` is already the marker-free crop.
 
 ```bash
 pnpm schema:preview --watch
 ```
 
-Watch mode stays running and refreshes whenever `input.jpg` or `schema.ts` changes. Invalid schemas print every discovered problem with its schema path and remove stale `output.png`. The canonical dimensions are fixed at 875 × 1280; an input mismatch is rejected instead of resized.
+The workbench validates the fixed canonical image contract, writes the bright
+measurement overlay to `tools/schema-preview/output.png`, and writes the same
+platform-neutral bubble diagnostics to `tools/schema-preview/result.json`.
+
+Watch mode stays running and refreshes whenever `input.jpg` or `schema.ts` changes. Invalid schemas print every discovered problem with its schema path and remove stale `output.png` and `result.json`. The canonical dimensions are fixed at 875 × 1280; an input mismatch is rejected instead of resized.
 
 On devices with a torch, the glass flash control can illuminate the document while scanning. The torch is turned off while the camera is paused for the captured-content modal.
 

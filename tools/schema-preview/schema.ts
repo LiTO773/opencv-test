@@ -30,6 +30,12 @@ export const schema: BubbleGradingSchema = {
   },
   bubbleStyle: {
     radiusPx: 10,
+    printedOutlineWidthPx: 1.5,
+    roiRadiusPx: 16,
+    fillRadiusPx: 7,
+    backgroundRingInnerRadiusPx: 12,
+    backgroundRingOuterRadiusPx: 14,
+    centerSearchTolerancePx: 2,
   },
   questions: [
     {
