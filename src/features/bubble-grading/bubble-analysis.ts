@@ -1,4 +1,9 @@
-import type { BubbleGradingSchema, BubbleStyle, PixelPoint } from './schema';
+import type {
+  BubbleGradingSchema,
+  BubbleStyle,
+  PixelPoint,
+  QuestionSchema,
+} from './schema';
 import {
   validateBubbleGradingSchema,
   type ImageDimensions,
@@ -30,6 +35,20 @@ export type BubbleReasonCode =
   | 'poor_local_contrast'
   | 'excessive_blur'
   | 'measurement_region_incomplete';
+export type QuestionDecision = 'correct' | 'incorrect' | 'needs_review';
+
+export type QuestionDecisionReason =
+  | { code: 'exact_match' }
+  | { code: 'blank_response' }
+  | { code: 'missing_selection'; bubbleIds: string[] }
+  | { code: 'extra_selection'; bubbleIds: string[] }
+  | {
+      code: 'uncertain_bubbles_could_change_outcome';
+      bubbles: {
+        bubbleId: string;
+        reasonCodes: BubbleReasonCode[];
+      }[];
+    };
 
 export type GrayscaleImage = ImageDimensions & {
   /** One row-major 0...255 luminance byte per pixel. */
@@ -70,10 +89,31 @@ export type BubbleDiagnostic = {
     minimumFocusScore: number;
   };
   timing: {
-    /** Kept null so unchanged offline inputs serialize identically across runs. */
-    durationMs: null;
+    /** Null unless timing is explicitly enabled for a diagnostic run. */
+    durationMs: number | null;
     sampledPixelCount: number;
   };
+};
+
+export type QuestionGradingResult = {
+  questionId: string;
+  label: string;
+  selectionMode: QuestionSchema['selectionMode'];
+  maximumPoints: number;
+  detectedFilledBubbleIds: string[];
+  correctBubbleIds: string[];
+  status: QuestionDecision;
+  awardedPoints: number;
+  pendingPoints: number;
+  confidence: number;
+  reasons: QuestionDecisionReason[];
+};
+
+export type GradingScore = {
+  maximumPoints: number;
+  awardedGradedPoints: number;
+  pendingReviewPoints: number;
+  counts: Record<QuestionDecision, number>;
 };
 
 export type BubbleAnalysisResult = {
@@ -90,12 +130,19 @@ export type BubbleAnalysisResult = {
     minimumFocusScore: number;
     reasonCodes: BubbleReasonCode[];
     timing: {
-      durationMs: null;
+      durationMs: number | null;
       analyzedRoiCount: number;
       sampledPixelCount: number;
     };
   };
   bubbles: BubbleDiagnostic[];
+  questions: QuestionGradingResult[];
+  score: GradingScore;
+};
+
+export type BubbleAnalysisOptions = {
+  /** Opt in for performance diagnostics; disabled by default for reproducible fixtures. */
+  recordTiming?: boolean;
 };
 
 export class BubbleAnalysisValidationFailure extends Error {
@@ -107,6 +154,10 @@ export class BubbleAnalysisValidationFailure extends Error {
 
 function rounded(value: number, digits = 6) {
   return Number(value.toFixed(digits));
+}
+
+function nowMilliseconds() {
+  return globalThis.performance?.now() ?? Date.now();
 }
 
 function pixel(image: GrayscaleImage, x: number, y: number) {
@@ -278,7 +329,9 @@ function analyzeBubble(
   bubbleId: string,
   expectedCenter: PixelPoint,
   config: BubbleDetectorConfig,
+  recordTiming: boolean,
 ): BubbleDiagnostic {
+  const startedAt = recordTiming ? nowMilliseconds() : null;
   const style = schema.bubbleStyle;
   const centerMatch = findMeasuredCenter(image, expectedCenter, style);
   const interior = collectDisk(image, centerMatch.center, style.fillRadiusPx);
@@ -371,9 +424,152 @@ function analyzeBubble(
       minimumFocusScore: config.minimumFocusScore,
     },
     timing: {
-      durationMs: null,
+      durationMs: startedAt === null ? null : rounded(nowMilliseconds() - startedAt, 3),
       sampledPixelCount:
         interior.values.length + background.values.length + focus.sampledPixelCount,
+    },
+  };
+}
+
+function exactSetMatch(actual: Set<string>, expected: Set<string>) {
+  return actual.size === expected.size && [...actual].every((id) => expected.has(id));
+}
+
+function minimumConfidence(diagnostics: BubbleDiagnostic[]) {
+  return rounded(
+    diagnostics.length === 0
+      ? 1
+      : Math.min(...diagnostics.map((diagnostic) => diagnostic.confidence)),
+  );
+}
+
+/**
+ * Converts already measured bubbles into exact-set question decisions. An
+ * uncertain bubble only defers a question when some assignment of all
+ * uncertain bubbles could produce the exact answer key.
+ */
+export function gradeBubbleDiagnostics(
+  schema: BubbleGradingSchema,
+  bubbles: BubbleDiagnostic[],
+): { questions: QuestionGradingResult[]; score: GradingScore } {
+  const diagnosticsByQuestion = new Map<string, Map<string, BubbleDiagnostic>>();
+  for (const diagnostic of bubbles) {
+    const questionDiagnostics = diagnosticsByQuestion.get(diagnostic.questionId) ?? new Map();
+    if (questionDiagnostics.has(diagnostic.bubbleId)) {
+      throw new Error(`Duplicate diagnostic for bubble ${diagnostic.bubbleId}.`);
+    }
+    questionDiagnostics.set(diagnostic.bubbleId, diagnostic);
+    diagnosticsByQuestion.set(diagnostic.questionId, questionDiagnostics);
+  }
+
+  const questions = schema.questions.map((question): QuestionGradingResult => {
+    const diagnosticMap = diagnosticsByQuestion.get(question.id) ?? new Map();
+    const diagnostics = question.bubbles.map((bubble) => {
+      const diagnostic = diagnosticMap.get(bubble.id);
+      if (!diagnostic) {
+        throw new Error(`Missing diagnostic for bubble ${bubble.id}.`);
+      }
+      return diagnostic;
+    });
+    const detectedFilledBubbleIds = diagnostics
+      .filter((diagnostic) => diagnostic.decision === 'filled')
+      .map((diagnostic) => diagnostic.bubbleId);
+    const uncertainDiagnostics = diagnostics.filter(
+      (diagnostic) => diagnostic.decision === 'uncertain',
+    );
+    const filled = new Set(detectedFilledBubbleIds);
+    const uncertain = new Set(uncertainDiagnostics.map((diagnostic) => diagnostic.bubbleId));
+    const correct = new Set(question.correctBubbleIds);
+    const missingCorrectIds = question.correctBubbleIds.filter((id) => !filled.has(id));
+    const extraFilledIds = detectedFilledBubbleIds.filter((id) => !correct.has(id));
+    const uncertaintyCanProduceExactAnswer =
+      extraFilledIds.length === 0 &&
+      missingCorrectIds.every((id) => uncertain.has(id));
+
+    if (uncertainDiagnostics.length > 0 && uncertaintyCanProduceExactAnswer) {
+      return {
+        questionId: question.id,
+        label: question.label,
+        selectionMode: question.selectionMode,
+        maximumPoints: question.points,
+        detectedFilledBubbleIds,
+        correctBubbleIds: [...question.correctBubbleIds],
+        status: 'needs_review',
+        awardedPoints: 0,
+        pendingPoints: question.points,
+        confidence: minimumConfidence(uncertainDiagnostics),
+        reasons: [
+          {
+            code: 'uncertain_bubbles_could_change_outcome',
+            bubbles: uncertainDiagnostics.map((diagnostic) => ({
+              bubbleId: diagnostic.bubbleId,
+              reasonCodes: [...diagnostic.reasonCodes],
+            })),
+          },
+        ],
+      };
+    }
+
+    if (exactSetMatch(filled, correct)) {
+      return {
+        questionId: question.id,
+        label: question.label,
+        selectionMode: question.selectionMode,
+        maximumPoints: question.points,
+        detectedFilledBubbleIds,
+        correctBubbleIds: [...question.correctBubbleIds],
+        status: 'correct',
+        awardedPoints: question.points,
+        pendingPoints: 0,
+        confidence: minimumConfidence(diagnostics),
+        reasons: [{ code: 'exact_match' }],
+      };
+    }
+
+    const reasons: QuestionDecisionReason[] = [];
+    if (detectedFilledBubbleIds.length === 0 && uncertainDiagnostics.length === 0) {
+      reasons.push({ code: 'blank_response' });
+    }
+    const clearMissingIds = missingCorrectIds.filter((id) => !uncertain.has(id));
+    if (clearMissingIds.length > 0) {
+      reasons.push({ code: 'missing_selection', bubbleIds: clearMissingIds });
+    }
+    if (extraFilledIds.length > 0) {
+      reasons.push({ code: 'extra_selection', bubbleIds: extraFilledIds });
+    }
+    const decisiveDiagnostics = diagnostics.filter(
+      (diagnostic) =>
+        extraFilledIds.includes(diagnostic.bubbleId) ||
+        clearMissingIds.includes(diagnostic.bubbleId),
+    );
+    return {
+      questionId: question.id,
+      label: question.label,
+      selectionMode: question.selectionMode,
+      maximumPoints: question.points,
+      detectedFilledBubbleIds,
+      correctBubbleIds: [...question.correctBubbleIds],
+      status: 'incorrect',
+      awardedPoints: 0,
+      pendingPoints: 0,
+      confidence: minimumConfidence(decisiveDiagnostics),
+      reasons,
+    };
+  });
+
+  const counts: Record<QuestionDecision, number> = {
+    correct: 0,
+    incorrect: 0,
+    needs_review: 0,
+  };
+  for (const question of questions) counts[question.status] += 1;
+  return {
+    questions,
+    score: {
+      maximumPoints: questions.reduce((sum, question) => sum + question.maximumPoints, 0),
+      awardedGradedPoints: questions.reduce((sum, question) => sum + question.awardedPoints, 0),
+      pendingReviewPoints: questions.reduce((sum, question) => sum + question.pendingPoints, 0),
+      counts,
     },
   };
 }
@@ -386,7 +582,9 @@ export function analyzeBubbleGradingImage(
   candidate: unknown,
   image: GrayscaleImage,
   config: BubbleDetectorConfig = PROVISIONAL_BUBBLE_DETECTOR_CONFIG,
+  options: BubbleAnalysisOptions = {},
 ): BubbleAnalysisResult {
+  const startedAt = options.recordTiming ? nowMilliseconds() : null;
   const validation = validateBubbleGradingSchema(candidate, {
     inputImage: { width: image.width, height: image.height },
   });
@@ -415,6 +613,7 @@ export function analyzeBubbleGradingImage(
         bubble.id,
         bubble.centerPx,
         config,
+        options.recordTiming === true,
       ),
     ),
   );
@@ -431,6 +630,7 @@ export function analyzeBubbleGradingImage(
     bubble.reasonCodes.forEach((reason) => reasonCodes.add(reason));
   }
 
+  const grading = gradeBubbleDiagnostics(validation.schema, bubbles);
   return {
     diagnosticFormatVersion: BUBBLE_DIAGNOSTIC_FORMAT_VERSION,
     detector: { id: config.id, provisional: true },
@@ -444,11 +644,12 @@ export function analyzeBubbleGradingImage(
       ),
       reasonCodes: [...reasonCodes],
       timing: {
-        durationMs: null,
+        durationMs: startedAt === null ? null : rounded(nowMilliseconds() - startedAt, 3),
         analyzedRoiCount: bubbles.length,
         sampledPixelCount,
       },
     },
     bubbles,
+    ...grading,
   };
 }

@@ -31,6 +31,12 @@ const DECISION_COLORS = {
   uncertain: "#FFE600",
 } as const;
 
+const QUESTION_DECISION_COLORS = {
+  correct: "#00FF85",
+  incorrect: "#FF3B30",
+  needs_review: "#FFE600",
+} as const;
+
 export class SchemaValidationFailure extends Error {
   constructor(readonly validationErrors: SchemaValidationError[]) {
     super(
@@ -71,6 +77,9 @@ export function buildOverlaySvg(
   const diagnosticsByBubbleId = new Map(
     diagnostics?.bubbles.map((bubble) => [bubble.bubbleId, bubble]) ?? [],
   );
+  const diagnosticsByQuestionId = new Map(
+    diagnostics?.questions.map((question) => [question.questionId, question]) ?? [],
+  );
   const parts = [
     `<svg width="${width}" height="${height}" viewBox="0 0 ${width} ${height}" xmlns="http://www.w3.org/2000/svg">`,
     `<g data-layer="qr-region">`,
@@ -81,6 +90,7 @@ export function buildOverlaySvg(
 
   schema.questions.forEach((question, questionIndex) => {
     const color = QUESTION_COLORS[questionIndex % QUESTION_COLORS.length];
+    const questionDiagnostic = diagnosticsByQuestionId.get(question.id);
     if (question.bubbles.length > 1) {
       const centers = question.bubbles.map(
         (bubble) => `${bubble.centerPx.x},${bubble.centerPx.y}`,
@@ -109,6 +119,17 @@ export function buildOverlaySvg(
         `</g>`,
       );
     });
+
+    if (questionDiagnostic && question.bubbles.length > 0) {
+      const firstCenter = question.bubbles[0].centerPx;
+      const questionColor = QUESTION_DECISION_COLORS[questionDiagnostic.status];
+      const pending = questionDiagnostic.pendingPoints > 0
+        ? ` · ${questionDiagnostic.pendingPoints} pending`
+        : "";
+      parts.push(
+        `<text data-layer="question-decision" data-question-id="${escapeXml(question.id)}" x="${firstCenter.x - bubbleStyle.roiRadiusPx}" y="${firstCenter.y + bubbleStyle.roiRadiusPx + 14}" fill="${questionColor}" ${textOutlineAttributes(10)}>${escapeXml(`${question.label} · ${questionDiagnostic.status.toUpperCase()} · ${questionDiagnostic.awardedPoints}/${questionDiagnostic.maximumPoints} pts${pending}`)}</text>`,
+      );
+    }
   });
 
   const bubbleCount = schema.questions.reduce(
@@ -136,8 +157,32 @@ function diagnosticTable(diagnostics: BubbleAnalysisResult, width: number, heigh
   const lineHeight = 12;
   const margin = 8;
   const maximumRows = Math.max(1, Math.floor((height - 100) / lineHeight));
-  const columnCount = Math.ceil(diagnostics.bubbles.length / maximumRows);
-  const rowsPerColumn = Math.ceil(diagnostics.bubbles.length / columnCount);
+  const entries = [
+    {
+      layer: "score-diagnostic",
+      idAttribute: "",
+      color: "#FFF",
+      text: `SCORE · awarded=${diagnostics.score.awardedGradedPoints}/${diagnostics.score.maximumPoints} · pending=${diagnostics.score.pendingReviewPoints} · correct=${diagnostics.score.counts.correct} · incorrect=${diagnostics.score.counts.incorrect} · review=${diagnostics.score.counts.needs_review}`,
+    },
+    ...diagnostics.questions.map((question) => ({
+      layer: "question-diagnostic",
+      idAttribute: ` data-question-id="${escapeXml(question.questionId)}"`,
+      color: QUESTION_DECISION_COLORS[question.status],
+      text: `${question.questionId} · ${question.status} · filled=[${question.detectedFilledBubbleIds.join(",")}] · correct=[${question.correctBubbleIds.join(",")}] · awarded=${question.awardedPoints} · pending=${question.pendingPoints} · conf=${question.confidence.toFixed(3)} · reasons=${question.reasons.map((reason) => reason.code).join(",")}`,
+    })),
+    ...diagnostics.bubbles.map((diagnostic) => {
+      const reasons = diagnostic.reasonCodes.length > 0 ? diagnostic.reasonCodes.join(",") : "none";
+      return {
+        layer: "bubble-diagnostic",
+        idAttribute: ` data-bubble-id="${escapeXml(diagnostic.bubbleId)}"`,
+        color: DECISION_COLORS[diagnostic.decision],
+        text: `${diagnostic.questionId}/${diagnostic.bubbleId} · fill=${diagnostic.darkPixelRatio.toFixed(3)} · bg=${diagnostic.backgroundBrightness.toFixed(3)} · ${diagnostic.decision} · conf=${diagnostic.confidence.toFixed(3)} · ${reasons}`,
+        body: `${escapeXml(`${diagnostic.questionId}/${diagnostic.bubbleId} · fill=${diagnostic.darkPixelRatio.toFixed(3)} · bg=${diagnostic.backgroundBrightness.toFixed(3)} · `)}<tspan data-layer="bubble-decision">${diagnostic.decision} · conf=${diagnostic.confidence.toFixed(3)}</tspan><tspan data-layer="bubble-reasons"> · ${escapeXml(reasons)}</tspan>`,
+      };
+    }),
+  ];
+  const columnCount = Math.ceil(entries.length / maximumRows);
+  const rowsPerColumn = Math.ceil(entries.length / columnCount);
   const panelHeight = (rowsPerColumn + 1) * lineHeight + 8;
   const columnWidth = (width - margin * 2) / columnCount;
   const top = height - panelHeight - margin;
@@ -145,15 +190,13 @@ function diagnosticTable(diagnostics: BubbleAnalysisResult, width: number, heigh
     `<g data-layer="diagnostic-table">`,
     `<rect x="${margin}" y="${top}" width="${width - margin * 2}" height="${panelHeight}" rx="6" fill="#000" fill-opacity="0.88" stroke="#FFE600" stroke-width="1" />`,
   ];
-  diagnostics.bubbles.forEach((diagnostic, index) => {
+  entries.forEach((entry, index) => {
     const column = Math.floor(index / rowsPerColumn);
     const row = index % rowsPerColumn;
     const x = margin + 6 + column * columnWidth;
     const y = top + 16 + row * lineHeight;
-    const color = DECISION_COLORS[diagnostic.decision];
-    const reasons = diagnostic.reasonCodes.length > 0 ? diagnostic.reasonCodes.join(",") : "none";
     parts.push(
-      `<text data-layer="bubble-diagnostic" data-bubble-id="${escapeXml(diagnostic.bubbleId)}" x="${x}" y="${y}" fill="${color}" font-family="Arial, sans-serif" font-size="8" font-weight="700">${escapeXml(`${diagnostic.questionId}/${diagnostic.bubbleId} · fill=${diagnostic.darkPixelRatio.toFixed(3)} · bg=${diagnostic.backgroundBrightness.toFixed(3)} · `)}<tspan data-layer="bubble-decision">${diagnostic.decision} · conf=${diagnostic.confidence.toFixed(3)}</tspan><tspan data-layer="bubble-reasons"> · ${escapeXml(reasons)}</tspan></text>`,
+      `<text data-layer="${entry.layer}"${entry.idAttribute} x="${x}" y="${y}" fill="${entry.color}" font-family="Arial, sans-serif" font-size="8" font-weight="700">${"body" in entry ? entry.body : escapeXml(entry.text)}</text>`,
     );
   });
   parts.push(`</g>`);
@@ -185,11 +228,16 @@ export async function generatePreview(
   if (raw.info.width !== metadata.width || raw.info.height !== metadata.height || raw.info.channels !== 1) {
     throw new Error(`Could not decode ${inputPath} as one-channel canonical grayscale pixels.`);
   }
-  const diagnostics = analyzeBubbleGradingImage(validation.schema, {
-    width: raw.info.width,
-    height: raw.info.height,
-    data: new Uint8Array(raw.data),
-  });
+  const diagnostics = analyzeBubbleGradingImage(
+    validation.schema,
+    {
+      width: raw.info.width,
+      height: raw.info.height,
+      data: new Uint8Array(raw.data),
+    },
+    undefined,
+    { recordTiming: true },
+  );
 
   const { svg, bubbleCount } = buildOverlaySvg(
     validation.schema,

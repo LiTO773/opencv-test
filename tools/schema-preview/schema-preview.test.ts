@@ -9,7 +9,10 @@ import sharp from 'sharp';
 import {
   analyzeBubbleGradingImage,
   BubbleAnalysisValidationFailure,
+  gradeBubbleDiagnostics,
   PROVISIONAL_BUBBLE_DETECTOR_CONFIG,
+  type BubbleDecision,
+  type BubbleDiagnostic,
   type GrayscaleImage,
 } from '../../src/features/bubble-grading/bubble-analysis';
 import {
@@ -21,6 +24,7 @@ import {
   CanonicalCropContractError,
 } from '../../src/features/bubble-grading/hardcoded-schema-contract';
 import { hardcodedBubbleGradingSchema } from '../../src/features/bubble-grading/hardcoded-schema';
+import type { BubbleGradingSchema, QuestionSchema } from '../../src/features/bubble-grading/schema';
 import { validateBubbleGradingSchema } from '../../src/features/bubble-grading/schema-validator';
 import { multipleErrorsSchemaFixture } from './fixtures/multiple-errors-schema';
 import { validSchemaFixture } from './fixtures/valid-schema';
@@ -80,6 +84,53 @@ function syntheticBubbleImage(options: {
     data[y * width + x] = index < darkCount ? 18 : paper;
   });
   return { width, height, data };
+}
+
+function gradingQuestion(
+  id: string,
+  selectionMode: QuestionSchema['selectionMode'],
+  points: number,
+  correctLabels: string[],
+  labels: string[] = ['a', 'b', 'c'],
+): QuestionSchema {
+  return {
+    id,
+    label: `Question ${id}`,
+    selectionMode,
+    points,
+    correctBubbleIds: correctLabels.map((label) => `${id}-${label}`),
+    bubbles: labels.map((label, index) => ({
+      id: `${id}-${label}`,
+      label: label.toUpperCase(),
+      centerPx: { x: 200 + index * 60, y: 200 },
+    })),
+  };
+}
+
+function diagnosticsFor(
+  schema: BubbleGradingSchema,
+  decisions: Record<string, BubbleDecision>,
+): BubbleDiagnostic[] {
+  const template = analyzeBubbleGradingImage(
+    oneBubbleSchema(),
+    syntheticBubbleImage(),
+  ).bubbles[0];
+  return schema.questions.flatMap((question) =>
+    question.bubbles.map((bubble) => {
+      const decision = decisions[bubble.id] ?? 'unfilled';
+      return {
+        ...template,
+        questionId: question.id,
+        bubbleId: bubble.id,
+        expectedCenterPx: { ...bubble.centerPx },
+        measuredCenterPx: { ...bubble.centerPx },
+        confidence: decision === 'uncertain' ? 0.25 : 0.9,
+        decision,
+        reasonCodes:
+          decision === 'uncertain' ? ['fill_score_in_uncertain_band'] : [],
+      };
+    }),
+  );
 }
 
 test('locks the app schema to the user-reviewed canonical crop', () => {
@@ -203,6 +254,9 @@ test('builds every required visual layer without crop anchors', () => {
     'bubble-diagnostic',
     'bubble-decision',
     'bubble-reasons',
+    'question-decision',
+    'question-diagnostic',
+    'score-diagnostic',
   ]) {
     assert.match(svg, new RegExp(`data-layer="${layer}"`));
   }
@@ -328,6 +382,127 @@ test('keeps provisional detector thresholds outside the generated schema', () =>
   );
 });
 
+test('grades single and multiple questions by exact selected-set equality', () => {
+  const schema = structuredClone(validSchemaFixture);
+  schema.questions = [
+    gradingQuestion('single', 'single', 1, ['a']),
+    gradingQuestion('multiple', 'multiple', 2, ['a', 'c']),
+    gradingQuestion('blank', 'single', 1, ['a']),
+    gradingQuestion('missing', 'multiple', 2, ['a', 'b']),
+    gradingQuestion('extra', 'single', 2, ['a']),
+    gradingQuestion('review', 'single', 3, ['a']),
+    gradingQuestion('review-multiple', 'multiple', 4, ['a', 'b']),
+  ];
+  const decisions: Record<string, BubbleDecision> = {
+    'single-a': 'filled',
+    'multiple-a': 'filled',
+    'multiple-c': 'filled',
+    'missing-a': 'filled',
+    'missing-c': 'uncertain',
+    'extra-a': 'filled',
+    'extra-b': 'filled',
+    'extra-c': 'uncertain',
+    'review-a': 'uncertain',
+    'review-multiple-a': 'uncertain',
+    'review-multiple-b': 'uncertain',
+  };
+
+  const result = gradeBubbleDiagnostics(schema, diagnosticsFor(schema, decisions));
+  assert.deepEqual(
+    result.questions.map((question) => question.status),
+    ['correct', 'correct', 'incorrect', 'incorrect', 'incorrect', 'needs_review', 'needs_review'],
+  );
+  assert.deepEqual(result.score, {
+    maximumPoints: 15,
+    awardedGradedPoints: 3,
+    pendingReviewPoints: 7,
+    counts: { correct: 2, incorrect: 3, needs_review: 2 },
+  });
+
+  const blank = result.questions[2];
+  assert.deepEqual(blank.detectedFilledBubbleIds, []);
+  assert.deepEqual(blank.reasons, [
+    { code: 'blank_response' },
+    { code: 'missing_selection', bubbleIds: ['blank-a'] },
+  ]);
+  const missing = result.questions[3];
+  assert.deepEqual(missing.detectedFilledBubbleIds, ['missing-a']);
+  assert.deepEqual(missing.reasons, [
+    { code: 'missing_selection', bubbleIds: ['missing-b'] },
+  ]);
+  const clearExtra = result.questions[4];
+  assert.equal(clearExtra.status, 'incorrect');
+  assert.deepEqual(clearExtra.reasons, [
+    { code: 'extra_selection', bubbleIds: ['extra-b'] },
+  ]);
+});
+
+test('reports every outcome-changing uncertain bubble and keeps its points pending', () => {
+  const schema = structuredClone(validSchemaFixture);
+  schema.questions = [gradingQuestion('q', 'multiple', 4, ['a', 'b'])];
+  const diagnostics = diagnosticsFor(schema, {
+    'q-a': 'uncertain',
+    'q-b': 'uncertain',
+  });
+
+  const result = gradeBubbleDiagnostics(schema, diagnostics);
+  const question = result.questions[0];
+  assert.equal(question.status, 'needs_review');
+  assert.equal(question.awardedPoints, 0);
+  assert.equal(question.pendingPoints, 4);
+  assert.equal(question.confidence, 0.25);
+  assert.deepEqual(question.reasons, [
+    {
+      code: 'uncertain_bubbles_could_change_outcome',
+      bubbles: [
+        { bubbleId: 'q-a', reasonCodes: ['fill_score_in_uncertain_band'] },
+        { bubbleId: 'q-b', reasonCodes: ['fill_score_in_uncertain_band'] },
+      ],
+    },
+  ]);
+});
+
+test('analyzes and grades a representative 50-question, 250-bubble sheet with bounded ROI work and timing', () => {
+  const width = 700;
+  const height = 2700;
+  const schema = structuredClone(validSchemaFixture);
+  schema.canonicalImage.dimensions = { status: 'fixed', widthPx: width, heightPx: height };
+  schema.questions = Array.from({ length: 50 }, (_, questionIndex) => {
+    const id = `q${questionIndex + 1}`;
+    const question = gradingQuestion(id, 'multiple', 2, ['a', 'c'], ['a', 'b', 'c', 'd', 'e']);
+    question.bubbles.forEach((bubble, bubbleIndex) => {
+      bubble.centerPx = { x: 220 + bubbleIndex * 60, y: 180 + questionIndex * 50 };
+    });
+    return question;
+  });
+  const image: GrayscaleImage = {
+    width,
+    height,
+    data: new Uint8Array(width * height).fill(240),
+  };
+
+  const result = analyzeBubbleGradingImage(
+    schema,
+    image,
+    undefined,
+    { recordTiming: true },
+  );
+  assert.equal(result.scan.bubbleCount, 250);
+  assert.equal(result.scan.timing.analyzedRoiCount, 250);
+  assert.equal(typeof result.scan.timing.durationMs, 'number');
+  assert.ok(result.bubbles.every((bubble) => typeof bubble.timing.durationMs === 'number'));
+  assert.equal(result.questions.length, 50);
+  assert.deepEqual(result.score, {
+    maximumPoints: 100,
+    awardedGradedPoints: 0,
+    pendingReviewPoints: 100,
+    counts: { correct: 0, incorrect: 0, needs_review: 50 },
+  });
+  const maximumBoundedSamples =
+    result.scan.bubbleCount * (schema.bubbleStyle.roiRadiusPx * 2 + 1) ** 2 * 2;
+  assert.ok(result.scan.timing.sampledPixelCount < maximumBoundedSamples);
+});
+
 test('writes a PNG overlay for a valid fixed input and schema', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'schema-preview-'));
   const inputPath = join(directory, 'input.jpg');
@@ -350,6 +525,13 @@ test('writes a PNG overlay for a valid fixed input and schema', async () => {
     assert.equal(result.height, 480);
     assert.equal(result.resultPath, resultPath);
     assert.equal(diagnostics.scan.bubbleCount, 4);
+    assert.equal(typeof diagnostics.scan.timing.durationMs, 'number');
+    assert.equal(diagnostics.questions.length, 2);
+    assert.deepEqual(diagnostics.score.counts, {
+      correct: 0,
+      incorrect: 0,
+      needs_review: 2,
+    });
     assert.deepEqual(diagnostics.bubbles.map((bubble: { bubbleId: string }) => bubble.bubbleId), [
       'q1-a',
       'q1-b',
