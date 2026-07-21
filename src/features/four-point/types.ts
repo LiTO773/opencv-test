@@ -1,3 +1,5 @@
+import type { MobileGradingOutcome } from '@/features/bubble-grading/mobile-bubble-grading';
+
 export type Point2D = {
   x: number;
   y: number;
@@ -65,4 +67,5 @@ export type FourPointScan = {
   height: number;
   qr: QrMetadata | null;
   studentId: string | null;
+  grading: MobileGradingOutcome;
 };

@@ -17,6 +17,7 @@ import {
 import { useCameraDevice, useCameraPermission } from 'react-native-vision-camera';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
+import { MobileGradingSummary } from '@/features/bubble-grading/mobile-grading-summary';
 import { FourPointCamera } from '@/features/four-point/four-point-camera';
 import { shareCleanScan } from '@/features/four-point/share-clean-scan';
 import type {
@@ -267,7 +268,7 @@ function ScannerCamera() {
           <View style={[styles.cropHeader, { paddingTop: insets.top + 10 }]}>
             <View style={styles.cropHeaderCopy}>
               <Text selectable style={styles.cropTitle}>
-                Folha recortada
+                Resultado da leitura
               </Text>
               <Text selectable style={styles.cropSubtitle}>
                 {capturedScan
@@ -290,12 +291,14 @@ function ScannerCamera() {
           <ScrollView
             bouncesZoom
             centerContent
+            contentInsetAdjustmentBehavior="automatic"
             contentContainerStyle={styles.cropScrollContent}
             maximumZoomScale={4}
             minimumZoomScale={1}
           >
             {capturedScan ? (
               <>
+                <MobileGradingSummary outcome={capturedScan.grading} />
                 <Image
                   accessibilityLabel="Fotografia da folha recortada e com perspetiva corrigida"
                   resizeMode="contain"
@@ -329,11 +332,7 @@ function ScannerCamera() {
                 ) : null}
                 <View style={styles.qrCard}>
                   <Text selectable style={styles.qrTitle}>
-                    {capturedScan.studentId
-                      ? `Aluno: ${capturedScan.studentId}`
-                      : capturedScan.qr
-                        ? 'QR lido · aluno não identificado'
-                        : 'QR não encontrado'}
+                    {capturedScan.qr ? 'Payload QR original' : 'QR não encontrado'}
                   </Text>
                   {capturedScan.qr ? (
                     <>

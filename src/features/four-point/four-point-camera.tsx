@@ -28,7 +28,11 @@ import { SkiaCamera, type SkiaCameraRef } from 'react-native-vision-camera-skia'
 import { scheduleOnRN } from 'react-native-worklets';
 
 import { CANONICAL_CROP_CONTRACT } from '@/features/bubble-grading/canonical-crop-contract';
-import { assertHardcodedSchemaImageContract } from '@/features/bubble-grading/hardcoded-schema-contract';
+import {
+  analyzeMobileBubbleGradingImage,
+  createMobileGradingFailure,
+  rgbaPixelsToGrayscaleImage,
+} from '@/features/bubble-grading/mobile-bubble-grading';
 import {
   createMarkerRegions,
   detectFourPoints,
@@ -147,6 +151,35 @@ function readQrFromImage(image: SkImage, width: number, height: number) {
   );
 }
 
+function gradeCanonicalImage(
+  image: SkImage,
+  width: number,
+  height: number,
+  qr: QrMetadata | null,
+) {
+  try {
+    const pixels = image.readPixels(0, 0, {
+      alphaType: AlphaType.Unpremul,
+      colorType: ColorType.RGBA_8888,
+      width,
+      height,
+    });
+    if (!pixels || pixels instanceof Float32Array) {
+      throw new Error('Não foi possível ler os píxeis da imagem canónica para classificação.');
+    }
+    const rgba = new Uint8Array(pixels.buffer, pixels.byteOffset, pixels.byteLength);
+    return analyzeMobileBubbleGradingImage(
+      rgbaPixelsToGrayscaleImage(rgba, width, height),
+      qr,
+    );
+  } catch (caught) {
+    return createMobileGradingFailure(
+      qr,
+      caught instanceof Error ? caught.message : String(caught),
+    );
+  }
+}
+
 function rotatePage180(image: SkImage, width: number, height: number) {
   const surface = Skia.Surface.Make(width, height);
   if (!surface) return null;
@@ -220,17 +253,15 @@ function normalizeSnapshot(
         }
       }
 
-      assertHardcodedSchemaImageContract({
-        width: finalImage.width(),
-        height: finalImage.height(),
-      });
-
+      const finalWidth = finalImage.width();
+      const finalHeight = finalImage.height();
       return {
         imageUri: `data:image/jpeg;base64,${finalImage.encodeToBase64(ImageFormat.JPEG, 92)}`,
-        width: outputWidth,
-        height: outputHeight,
+        width: finalWidth,
+        height: finalHeight,
         qr,
         studentId: qr ? readQrPayloadId(qr, 'studentId') : null,
+        grading: gradeCanonicalImage(finalImage, finalWidth, finalHeight, qr),
       };
     } finally {
       rotatedPage?.image.dispose();

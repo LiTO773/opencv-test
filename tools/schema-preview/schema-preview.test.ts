@@ -24,8 +24,15 @@ import {
   CanonicalCropContractError,
 } from '../../src/features/bubble-grading/hardcoded-schema-contract';
 import { hardcodedBubbleGradingSchema } from '../../src/features/bubble-grading/hardcoded-schema';
+import {
+  analyzeMobileBubbleGradingImage,
+  buildMobileScoreSummary,
+  rgbaPixelsToGrayscaleImage,
+} from '../../src/features/bubble-grading/mobile-bubble-grading';
 import type { BubbleGradingSchema, QuestionSchema } from '../../src/features/bubble-grading/schema';
 import { validateBubbleGradingSchema } from '../../src/features/bubble-grading/schema-validator';
+import type { QrMetadata } from '../../src/features/four-point/types';
+import { mobileGradingResultFixture } from './fixtures/mobile-grading-result';
 import { multipleErrorsSchemaFixture } from './fixtures/multiple-errors-schema';
 import { validSchemaFixture } from './fixtures/valid-schema';
 import { buildOverlaySvg, generatePreview } from './preview-renderer';
@@ -165,6 +172,111 @@ test('accepts only images that match the hardcoded app schema dimensions', () =>
       return true;
     },
   );
+});
+
+test('converts mobile RGBA pixels into the shared grayscale image contract', () => {
+  const image = rgbaPixelsToGrayscaleImage(
+    new Uint8Array([
+      255, 0, 0, 255,
+      0, 255, 0, 255,
+    ]),
+    2,
+    1,
+  );
+
+  assert.deepEqual(
+    { width: image.width, height: image.height, data: [...image.data] },
+    { width: 2, height: 1, data: [54, 182] },
+  );
+  assert.throws(
+    () => rgbaPixelsToGrayscaleImage(new Uint8Array(7), 2, 1),
+    /Esperados 8 bytes RGBA/,
+  );
+});
+
+test('grades the exact canonical mobile image with the offline result shape and diagnostic-only QR ids', () => {
+  const qr: QrMetadata = {
+    rawValue: '{"studentId":"student-7"}',
+    payload: {
+      studentId: 'student-7',
+      sheetId: 'sheet-22',
+      testId: 'a-different-test-id',
+      schemaVersion: '999',
+    },
+    payloadFormat: 'json',
+    qrVersion: 5,
+    orientation: 'upright',
+    rotationApplied: 0,
+  };
+  const image: GrayscaleImage = {
+    width: CANONICAL_CROP_CONTRACT.widthPx,
+    height: CANONICAL_CROP_CONTRACT.heightPx,
+    data: new Uint8Array(
+      CANONICAL_CROP_CONTRACT.widthPx * CANONICAL_CROP_CONTRACT.heightPx,
+    ).fill(240),
+  };
+
+  const mobile = analyzeMobileBubbleGradingImage(image, qr);
+  assert.equal(mobile.status, 'graded');
+  if (mobile.status !== 'graded') return;
+  assert.deepEqual(mobile.scanDiagnostics, {
+    studentId: 'student-7',
+    sheetId: 'sheet-22',
+    testId: 'a-different-test-id',
+    schemaVersion: '999',
+  });
+  assert.deepEqual(Object.keys(mobile.result), [
+    'diagnosticFormatVersion',
+    'detector',
+    'scan',
+    'bubbles',
+    'questions',
+    'score',
+  ]);
+  assert.equal(mobile.result.questions.length, hardcodedBubbleGradingSchema.questions.length);
+  assert.equal(typeof mobile.result.scan.timing.durationMs, 'number');
+});
+
+test('presents exact mobile dimension failures without discarding QR diagnostics', () => {
+  const qr: QrMetadata = {
+    rawValue: 'student-only',
+    payload: { studentId: 'student-8', sheetId: 'sheet-23' },
+    payloadFormat: 'json',
+    qrVersion: 2,
+    orientation: 'upright',
+    rotationApplied: 0,
+  };
+  const width = CANONICAL_CROP_CONTRACT.widthPx - 1;
+  const mobile = analyzeMobileBubbleGradingImage(
+    {
+      width,
+      height: CANONICAL_CROP_CONTRACT.heightPx,
+      data: new Uint8Array(width * CANONICAL_CROP_CONTRACT.heightPx),
+    },
+    qr,
+  );
+
+  assert.equal(mobile.status, 'failed');
+  if (mobile.status !== 'failed') return;
+  assert.equal(mobile.failure.kind, 'schema_validation');
+  assert.ok(
+    mobile.failure.validationErrors.some(
+      (error) => error.code === 'image_dimension_mismatch',
+    ),
+  );
+  assert.equal(mobile.scanDiagnostics.studentId, 'student-8');
+  assert.equal(mobile.scanDiagnostics.sheetId, 'sheet-23');
+});
+
+test('builds the first mobile score summary from a deterministic grading-result fixture', () => {
+  assert.deepEqual(buildMobileScoreSummary(mobileGradingResultFixture), {
+    maximumPoints: 5,
+    awardedGradedPoints: 2,
+    pendingReviewPoints: 3,
+    counts: { correct: 1, incorrect: 0, needs_review: 1 },
+    provisional: true,
+    reviewReasonCodes: ['excessive_blur'],
+  });
 });
 
 test('accepts a complete canonical-pixel schema', () => {
