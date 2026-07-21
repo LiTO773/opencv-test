@@ -33,7 +33,7 @@ import {
   detectFourPointsFromRgba,
   mapAnalysisToSource,
 } from '@/features/four-point/four-point-detection';
-import { readQrMetadata } from '@/features/four-point/qr-reader';
+import { readQrMetadata, readQrPayloadId } from '@/features/four-point/qr-reader';
 import type {
   FourPointAnalysis,
   FourPointScan,
@@ -47,6 +47,12 @@ import type {
 const ANALYSIS_WIDTH = 420;
 const DETECTION_INTERVAL_FRAMES = 2;
 const CONFIRMATION_FRAMES = 2;
+
+// TODO(bubble-grading): Set these together only after the schema workbench
+// establishes the generator-to-crop contract. Phase 01 intentionally preserves
+// the measured crop dimensions instead of guessing canonical dimensions.
+export const CANONICAL_CROP_WIDTH_PX: number | null = null;
+export const CANONICAL_CROP_HEIGHT_PX: number | null = null;
 
 const guidePaint = Skia.Paint();
 guidePaint.setStyle(PaintStyle.Stroke);
@@ -178,14 +184,16 @@ function normalizeSnapshot(
       snapshot.height(),
     ),
   ) as Quadrilateral;
-  const outputWidth = Math.max(
+  const measuredWidth = Math.max(
     1,
     Math.round((edgeLength(source[0], source[1]) + edgeLength(source[3], source[2])) / 2),
   );
-  const outputHeight = Math.max(
+  const measuredHeight = Math.max(
     1,
     Math.round((edgeLength(source[0], source[3]) + edgeLength(source[1], source[2])) / 2),
   );
+  const outputWidth = CANONICAL_CROP_WIDTH_PX ?? measuredWidth;
+  const outputHeight = CANONICAL_CROP_HEIGHT_PX ?? measuredHeight;
   const destination: Quadrilateral = [
     { x: 0, y: 0 },
     { x: outputWidth, y: 0 },
@@ -231,6 +239,7 @@ function normalizeSnapshot(
         width: outputWidth,
         height: outputHeight,
         qr,
+        studentId: qr ? readQrPayloadId(qr, 'studentId') : null,
       };
     } finally {
       rotatedPage?.image.dispose();
@@ -327,7 +336,14 @@ function analyzeAndNormalizeCapturedImage(
     regions,
   );
   if (!analysis.cropQuadrilateral) {
-    throw new Error('Um marcador saiu da área durante a fotografia. Enquadre novamente.');
+    if (analysis.matchedCount < 4) {
+      throw new Error(
+        'A fotografia final já não contém os quatro marcadores exteriores. Enquadre a folha e tente novamente.',
+      );
+    }
+    throw new Error(
+      'Os quatro marcadores da fotografia final já não formam uma folha vertical válida. Enquadre novamente.',
+    );
   }
   const scan = normalizeSnapshot(
     image,

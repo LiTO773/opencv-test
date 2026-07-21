@@ -64,4 +64,5 @@ export type FourPointScan = {
   width: number;
   height: number;
   qr: QrMetadata | null;
+  studentId: string | null;
 };

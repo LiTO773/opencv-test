@@ -294,15 +294,19 @@ function findMarkerInRegion(
   return bestMarker;
 }
 
-function outerCropQuadrilateral(markers: MarkerMatches): Quadrilateral | null {
+function markerFreeCropQuadrilateral(markers: MarkerMatches): Quadrilateral | null {
   'worklet';
   const [topLeft, topRight, bottomRight, bottomLeft] = markers;
   if (!topLeft || !topRight || !bottomRight || !bottomLeft) return null;
+
+  // Marker corners are ordered top-left, top-right, bottom-right, bottom-left.
+  // Use the inward-facing corners so both complete marker columns are excluded,
+  // while the top and bottom marker edges retain the intended vertical span.
   return [
-    topLeft.corners[0],
-    topRight.corners[1],
-    bottomRight.corners[2],
-    bottomLeft.corners[3],
+    topLeft.corners[1],
+    topRight.corners[0],
+    bottomRight.corners[3],
+    bottomLeft.corners[2],
   ];
 }
 
@@ -359,7 +363,7 @@ function analyzePixels(
       markers[index] = findMarkerInRegion(source, channels, conversion, regions[index]);
     }
     const matchedCount = markers.reduce((count, marker) => count + (marker ? 1 : 0), 0);
-    const crop = outerCropQuadrilateral(markers);
+    const crop = markerFreeCropQuadrilateral(markers);
     return {
       markers,
       matchedCount,

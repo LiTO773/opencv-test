@@ -49,3 +49,15 @@ export function readQrMetadata(
     rotationApplied: 0,
   };
 }
+
+export function readQrPayloadId(
+  metadata: QrMetadata,
+  field: 'schemaVersion' | 'sheetId' | 'studentId' | 'testId',
+): string | null {
+  const { payload } = metadata;
+  if (!payload || Array.isArray(payload) || typeof payload !== 'object') return null;
+  const value = payload[field];
+  if (typeof value === 'string') return value.trim() || null;
+  if (typeof value === 'number' && Number.isFinite(value)) return String(value);
+  return null;
+}

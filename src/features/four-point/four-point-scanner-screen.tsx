@@ -18,6 +18,7 @@ import { useCameraDevice, useCameraPermission } from 'react-native-vision-camera
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { FourPointCamera } from '@/features/four-point/four-point-camera';
+import { shareCleanScan } from '@/features/four-point/share-clean-scan';
 import type {
   FourPointScan,
   FourPointScanState,
@@ -76,6 +77,8 @@ function ScannerCamera() {
   const [processorError, setProcessorError] = useState<string | null>(null);
   const [capturedScan, setCapturedScan] = useState<FourPointScan | null>(null);
   const [scanSession, setScanSession] = useState(0);
+  const [shareError, setShareError] = useState<string | null>(null);
+  const [isSharing, setIsSharing] = useState(false);
   const [torchEnabled, setTorchEnabled] = useState(false);
 
   const handleScanStateChange = useCallback((state: FourPointScanState) => {
@@ -96,14 +99,29 @@ function ScannerCamera() {
   const handleCropCaptured = useCallback((scan: FourPointScan) => {
     setTorchEnabled(false);
     setProcessorError(null);
+    setShareError(null);
     setCapturedScan(scan);
   }, []);
   const handleCloseCrop = useCallback(() => {
     setCapturedScan(null);
+    setShareError(null);
+    setIsSharing(false);
     setMarkerCount(0);
     setScanState('searching');
     setScanSession((session) => session + 1);
   }, []);
+  const handleShareCrop = useCallback(async () => {
+    if (!capturedScan || isSharing) return;
+    setIsSharing(true);
+    setShareError(null);
+    try {
+      await shareCleanScan(capturedScan);
+    } catch (caught) {
+      setShareError(caught instanceof Error ? caught.message : String(caught));
+    } finally {
+      setIsSharing(false);
+    }
+  }, [capturedScan, isSharing]);
 
   if (!device) {
     return (
@@ -219,7 +237,7 @@ function ScannerCamera() {
           </Text>
           <Text selectable style={styles.instructionBody}>
             {scanState === 'capturing'
-              ? 'A fotografia será recortada pelos limites exteriores dos quatro marcadores.'
+              ? 'A fotografia será recortada entre os limites interiores dos quatro marcadores, sem as colunas laterais.'
               : scanState === 'ready'
                 ? 'A captura é automática assim que a segunda leitura confirmar os marcadores.'
                 : markerCount === 4
@@ -287,9 +305,35 @@ function ScannerCamera() {
                     height: (windowWidth - 32) * (capturedScan.height / capturedScan.width),
                   }}
                 />
+                <Pressable
+                  accessibilityLabel="Partilhar a fotografia JPEG limpa"
+                  accessibilityRole="button"
+                  accessibilityState={{ busy: isSharing, disabled: isSharing }}
+                  disabled={isSharing}
+                  onPress={handleShareCrop}
+                  style={({ pressed }) => [
+                    styles.shareButton,
+                    pressed && !isSharing ? styles.shareButtonPressed : null,
+                    isSharing ? styles.shareButtonDisabled : null,
+                  ]}
+                >
+                  {isSharing ? <ActivityIndicator color="#FFFFFF" /> : null}
+                  <Text style={styles.shareButtonText}>
+                    {isSharing ? 'A preparar JPEG…' : 'Partilhar JPEG limpo'}
+                  </Text>
+                </Pressable>
+                {shareError ? (
+                  <Text selectable style={styles.shareError}>
+                    Não foi possível partilhar: {shareError}
+                  </Text>
+                ) : null}
                 <View style={styles.qrCard}>
                   <Text selectable style={styles.qrTitle}>
-                    {capturedScan.qr ? 'QR lido' : 'QR não encontrado'}
+                    {capturedScan.studentId
+                      ? `Aluno: ${capturedScan.studentId}`
+                      : capturedScan.qr
+                        ? 'QR lido · aluno não identificado'
+                        : 'QR não encontrado'}
                   </Text>
                   {capturedScan.qr ? (
                     <>
@@ -506,6 +550,21 @@ const styles = StyleSheet.create({
     borderCurve: 'continuous',
     backgroundColor: '#FFFFFF',
   },
+  shareButton: {
+    minHeight: 50,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 10,
+    paddingHorizontal: 20,
+    borderRadius: 15,
+    borderCurve: 'continuous',
+    backgroundColor: '#15803D',
+  },
+  shareButtonPressed: { opacity: 0.82 },
+  shareButtonDisabled: { opacity: 0.64 },
+  shareButtonText: { color: '#FFFFFF', fontSize: 16, fontWeight: '700' },
+  shareError: { color: '#B91C1C', fontSize: 13, lineHeight: 18, textAlign: 'center' },
   qrTitle: { color: '#111827', fontSize: 17, fontWeight: '700' },
   qrMetadata: {
     color: '#1F2937',
