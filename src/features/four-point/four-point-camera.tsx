@@ -33,12 +33,14 @@ import {
   detectFourPointsFromRgba,
   mapAnalysisToSource,
 } from '@/features/four-point/four-point-detection';
+import { readQrMetadata } from '@/features/four-point/qr-reader';
 import type {
   FourPointAnalysis,
   FourPointScan,
   FourPointScanState,
   MarkerRegion,
   Point2D,
+  QrMetadata,
   Quadrilateral,
 } from '@/features/four-point/types';
 
@@ -130,6 +132,37 @@ function edgeLength(first: Point2D, second: Point2D) {
   return Math.hypot(first.x - second.x, first.y - second.y);
 }
 
+function readQrFromImage(image: SkImage, width: number, height: number) {
+  const pixels = image.readPixels(0, 0, {
+    alphaType: AlphaType.Unpremul,
+    colorType: ColorType.RGBA_8888,
+    width,
+    height,
+  });
+  if (!pixels || pixels instanceof Float32Array) return null;
+  return readQrMetadata(
+    new Uint8ClampedArray(pixels.buffer, pixels.byteOffset, pixels.byteLength),
+    width,
+    height,
+  );
+}
+
+function rotatePage180(image: SkImage, width: number, height: number) {
+  const surface = Skia.Surface.Make(width, height);
+  if (!surface) return null;
+  try {
+    const canvas = surface.getCanvas();
+    canvas.clear(Skia.Color('#FFFFFF'));
+    canvas.rotate(180, width / 2, height / 2);
+    canvas.drawImage(image, 0, 0);
+    surface.flush();
+    return { image: surface.makeImageSnapshot(), surface };
+  } catch (caught) {
+    surface.dispose();
+    throw caught;
+  }
+}
+
 function normalizeSnapshot(
   snapshot: SkImage,
   analysisQuadrilateral: Quadrilateral,
@@ -175,14 +208,33 @@ function normalizeSnapshot(
 
     const normalizedSnapshot = surface.makeImageSnapshot();
     const rasterImage = normalizedSnapshot.makeNonTextureImage();
-    const finalImage = rasterImage ?? normalizedSnapshot;
+    const normalizedImage = rasterImage ?? normalizedSnapshot;
+    let rotatedPage: ReturnType<typeof rotatePage180> = null;
     try {
+      const detectedQr = readQrFromImage(normalizedImage, outputWidth, outputHeight);
+      let qr: QrMetadata | null = detectedQr;
+      let finalImage = normalizedImage;
+      if (detectedQr?.orientation === 'upside-down') {
+        rotatedPage = rotatePage180(normalizedImage, outputWidth, outputHeight);
+        if (rotatedPage) {
+          finalImage = rotatedPage.image;
+          qr = {
+            ...detectedQr,
+            orientation: 'upright',
+            rotationApplied: 180,
+          };
+        }
+      }
+
       return {
         imageUri: `data:image/jpeg;base64,${finalImage.encodeToBase64(ImageFormat.JPEG, 92)}`,
         width: outputWidth,
         height: outputHeight,
+        qr,
       };
     } finally {
+      rotatedPage?.image.dispose();
+      rotatedPage?.surface.dispose();
       if (rasterImage && rasterImage !== normalizedSnapshot) rasterImage.dispose();
       normalizedSnapshot.dispose();
     }

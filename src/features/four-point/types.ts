@@ -36,8 +36,32 @@ export type FourPointAnalysis = {
 
 export type FourPointScanState = 'searching' | 'ready' | 'capturing';
 
+export type JsonValue =
+  | boolean
+  | number
+  | string
+  | null
+  | JsonValue[]
+  | { [key: string]: JsonValue };
+
+export type QrOrientation =
+  | 'upright'
+  | 'clockwise'
+  | 'upside-down'
+  | 'counter-clockwise';
+
+export type QrMetadata = {
+  rawValue: string;
+  payload: JsonValue | null;
+  payloadFormat: 'json' | 'text';
+  qrVersion: number;
+  orientation: QrOrientation;
+  rotationApplied: 0 | 180;
+};
+
 export type FourPointScan = {
   imageUri: string;
   width: number;
   height: number;
+  qr: QrMetadata | null;
 };

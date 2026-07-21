@@ -277,15 +277,41 @@ function ScannerCamera() {
             minimumZoomScale={1}
           >
             {capturedScan ? (
-              <Image
-                accessibilityLabel="Fotografia da folha recortada e com perspetiva corrigida"
-                resizeMode="contain"
-                source={{ uri: capturedScan.imageUri }}
-                style={{
-                  width: windowWidth - 32,
-                  height: (windowWidth - 32) * (capturedScan.height / capturedScan.width),
-                }}
-              />
+              <>
+                <Image
+                  accessibilityLabel="Fotografia da folha recortada e com perspetiva corrigida"
+                  resizeMode="contain"
+                  source={{ uri: capturedScan.imageUri }}
+                  style={{
+                    width: windowWidth - 32,
+                    height: (windowWidth - 32) * (capturedScan.height / capturedScan.width),
+                  }}
+                />
+                <View style={styles.qrCard}>
+                  <Text selectable style={styles.qrTitle}>
+                    {capturedScan.qr ? 'QR lido' : 'QR não encontrado'}
+                  </Text>
+                  {capturedScan.qr ? (
+                    <>
+                      <Text selectable style={styles.qrMetadata}>
+                        {capturedScan.qr.payloadFormat === 'json'
+                          ? JSON.stringify(capturedScan.qr.payload, null, 2)
+                          : capturedScan.qr.rawValue}
+                      </Text>
+                      <Text selectable style={styles.qrDetails}>
+                        QR v{capturedScan.qr.qrVersion}
+                        {capturedScan.qr.rotationApplied === 180
+                          ? ' · folha rodada automaticamente 180°'
+                          : ''}
+                      </Text>
+                    </>
+                  ) : (
+                    <Text selectable style={styles.qrDetails}>
+                      A fotografia foi recortada, mas não foi possível descodificar um QR.
+                    </Text>
+                  )}
+                </View>
+              </>
             ) : null}
           </ScrollView>
           <View style={{ height: insets.bottom }} />
@@ -469,5 +495,23 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     padding: 16,
+    gap: 16,
   },
+  qrCard: {
+    width: '100%',
+    maxWidth: 560,
+    gap: 8,
+    padding: 16,
+    borderRadius: 18,
+    borderCurve: 'continuous',
+    backgroundColor: '#FFFFFF',
+  },
+  qrTitle: { color: '#111827', fontSize: 17, fontWeight: '700' },
+  qrMetadata: {
+    color: '#1F2937',
+    fontFamily: 'monospace',
+    fontSize: 13,
+    lineHeight: 18,
+  },
+  qrDetails: { color: '#6B7280', fontSize: 13, lineHeight: 18 },
 });
