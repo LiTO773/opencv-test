@@ -29,6 +29,10 @@ import {
   buildMobileScoreSummary,
   rgbaPixelsToGrayscaleImage,
 } from '../../src/features/bubble-grading/mobile-bubble-grading';
+import {
+  buildMobileQuestionReview,
+  scaledBubbleFrame,
+} from '../../src/features/bubble-grading/mobile-question-review';
 import type { BubbleGradingSchema, QuestionSchema } from '../../src/features/bubble-grading/schema';
 import { validateBubbleGradingSchema } from '../../src/features/bubble-grading/schema-validator';
 import type { QrMetadata } from '../../src/features/four-point/types';
@@ -276,6 +280,79 @@ test('builds the first mobile score summary from a deterministic grading-result 
     counts: { correct: 1, incorrect: 0, needs_review: 1 },
     provisional: true,
     reviewReasonCodes: ['excessive_blur'],
+  });
+});
+
+test('builds human-labelled visual question review without changing grading diagnostics', () => {
+  const bubbles = diagnosticsFor(validSchemaFixture, {
+    'q1-a': 'filled',
+    'q2-a': 'uncertain',
+    'q2-b': 'uncertain',
+  });
+  const grading = gradeBubbleDiagnostics(validSchemaFixture, bubbles);
+  const result = {
+    ...mobileGradingResultFixture,
+    bubbles,
+    questions: grading.questions,
+    score: grading.score,
+  };
+  const before = structuredClone(result);
+
+  const review = buildMobileQuestionReview(result, validSchemaFixture);
+
+  assert.deepEqual(result, before);
+  assert.deepEqual(
+    review.map((question) => ({
+      label: question.label,
+      mode: question.selectionModeLabel,
+      detected: question.detectedAnswerLabels,
+      correct: question.correctAnswerLabels,
+      status: question.status,
+      points: [question.awardedPoints, question.pendingPoints],
+      confidence: question.confidencePercent,
+    })),
+    [
+      {
+        label: 'Question 1',
+        mode: 'Resposta única',
+        detected: ['A'],
+        correct: ['A'],
+        status: 'correct',
+        points: [1, 0],
+        confidence: 90,
+      },
+      {
+        label: 'Question 2',
+        mode: 'Várias respostas',
+        detected: [],
+        correct: ['A', 'B'],
+        status: 'needs_review',
+        points: [0, 2],
+        confidence: 25,
+      },
+    ],
+  );
+  assert.deepEqual(
+    review[0].bubbles.map((bubble) => bubble.tone),
+    ['success', 'subordinate'],
+  );
+  assert.deepEqual(
+    review[1].bubbles.map((bubble) => bubble.tone),
+    ['warning', 'warning'],
+  );
+  assert.ok(review[1].reasonMessages.every((message) => !message.includes('q2-')));
+  assert.deepEqual(review[1].reasonCodes, [
+    'uncertain_bubbles_could_change_outcome',
+    'fill_score_in_uncertain_band',
+  ]);
+});
+
+test('scales schema bubble geometry into the fitted image coordinate space', () => {
+  assert.deepEqual(scaledBubbleFrame({ x: 220, y: 200 }, 12, 640, 320), {
+    left: 104,
+    top: 94,
+    width: 12,
+    height: 12,
   });
 });
 

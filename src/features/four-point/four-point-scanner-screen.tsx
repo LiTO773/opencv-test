@@ -1,6 +1,6 @@
 import { GlassView } from 'expo-glass-effect';
 import { StatusBar } from 'expo-status-bar';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   AppState,
@@ -18,6 +18,7 @@ import { useCameraDevice, useCameraPermission } from 'react-native-vision-camera
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { MobileGradingSummary } from '@/features/bubble-grading/mobile-grading-summary';
+import { MobileVisualQuestionReview } from '@/features/bubble-grading/mobile-visual-question-review';
 import { FourPointCamera } from '@/features/four-point/four-point-camera';
 import { shareCleanScan } from '@/features/four-point/share-clean-scan';
 import type {
@@ -81,6 +82,8 @@ function ScannerCamera() {
   const [shareError, setShareError] = useState<string | null>(null);
   const [isSharing, setIsSharing] = useState(false);
   const [torchEnabled, setTorchEnabled] = useState(false);
+  const cropScrollRef = useRef<ScrollView>(null);
+  const visualReviewOffsetRef = useRef(0);
 
   const handleScanStateChange = useCallback((state: FourPointScanState) => {
     setScanState(state);
@@ -295,19 +298,42 @@ function ScannerCamera() {
             contentContainerStyle={styles.cropScrollContent}
             maximumZoomScale={4}
             minimumZoomScale={1}
+            ref={cropScrollRef}
           >
             {capturedScan ? (
               <>
                 <MobileGradingSummary outcome={capturedScan.grading} />
-                <Image
-                  accessibilityLabel="Fotografia da folha recortada e com perspetiva corrigida"
-                  resizeMode="contain"
-                  source={{ uri: capturedScan.imageUri }}
-                  style={{
-                    width: windowWidth - 32,
-                    height: (windowWidth - 32) * (capturedScan.height / capturedScan.width),
-                  }}
-                />
+                {capturedScan.grading.status === 'graded' ? (
+                  <View
+                    onLayout={(event) => {
+                      visualReviewOffsetRef.current = event.nativeEvent.layout.y;
+                    }}
+                    style={styles.visualReviewContainer}
+                  >
+                    <MobileVisualQuestionReview
+                      imageHeight={capturedScan.height}
+                      imageUri={capturedScan.imageUri}
+                      imageWidth={capturedScan.width}
+                      onLocateQuestion={() => {
+                        cropScrollRef.current?.scrollTo({
+                          animated: true,
+                          y: Math.max(visualReviewOffsetRef.current - 8, 0),
+                        });
+                      }}
+                      result={capturedScan.grading.result}
+                    />
+                  </View>
+                ) : (
+                  <Image
+                    accessibilityLabel="Fotografia canónica limpa da folha"
+                    resizeMode="contain"
+                    source={{ uri: capturedScan.imageUri }}
+                    style={{
+                      width: windowWidth - 32,
+                      height: (windowWidth - 32) * (capturedScan.height / capturedScan.width),
+                    }}
+                  />
+                )}
                 <Pressable
                   accessibilityLabel="Partilhar a fotografia JPEG limpa"
                   accessibilityRole="button"
@@ -540,6 +566,7 @@ const styles = StyleSheet.create({
     padding: 16,
     gap: 16,
   },
+  visualReviewContainer: { width: '100%', alignItems: 'center' },
   qrCard: {
     width: '100%',
     maxWidth: 560,
