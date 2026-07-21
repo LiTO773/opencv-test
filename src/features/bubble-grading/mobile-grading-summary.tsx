@@ -49,34 +49,6 @@ function CountValue({
   );
 }
 
-function DiagnosticsMetadata({ outcome }: { outcome: MobileGradingOutcome }) {
-  const { scanDiagnostics } = outcome;
-  return (
-    <View style={styles.metadataCard}>
-      <Text selectable style={styles.cardEyebrow}>
-        DIAGNÓSTICO DO QR
-      </Text>
-      <View style={styles.metadataGrid}>
-        <Text selectable style={styles.metadataLabel}>sheetId</Text>
-        <Text selectable style={styles.metadataValue}>
-          {scanDiagnostics.sheetId ?? 'não disponível'}
-        </Text>
-        <Text selectable style={styles.metadataLabel}>testId</Text>
-        <Text selectable style={styles.metadataValue}>
-          {scanDiagnostics.testId ?? 'não disponível'}
-        </Text>
-        <Text selectable style={styles.metadataLabel}>schemaVersion</Text>
-        <Text selectable style={styles.metadataValue}>
-          {scanDiagnostics.schemaVersion ?? 'não disponível'}
-        </Text>
-      </View>
-      <Text selectable style={styles.metadataNote}>
-        Estes valores são apenas diagnósticos neste protótipo; não escolhem o esquema nem rejeitam a leitura.
-      </Text>
-    </View>
-  );
-}
-
 export function MobileGradingSummary({ outcome }: { outcome: MobileGradingOutcome }) {
   const studentId = outcome.scanDiagnostics.studentId;
 
@@ -125,7 +97,6 @@ export function MobileGradingSummary({ outcome }: { outcome: MobileGradingOutcom
         </View>
       )}
 
-      <DiagnosticsMetadata outcome={outcome} />
     </View>
   );
 }
@@ -264,26 +235,4 @@ const styles = StyleSheet.create({
     lineHeight: 17,
   },
   failureNote: { color: '#7F1D1D', fontSize: 12, lineHeight: 17, paddingTop: 3 },
-  metadataCard: {
-    gap: 10,
-    padding: 18,
-    borderRadius: 20,
-    borderCurve: 'continuous',
-    backgroundColor: '#FFFFFF',
-  },
-  metadataGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
-  metadataLabel: {
-    width: 112,
-    color: '#6B7280',
-    fontFamily: 'monospace',
-    fontSize: 12,
-  },
-  metadataValue: {
-    minWidth: 180,
-    flex: 1,
-    color: '#1F2937',
-    fontFamily: 'monospace',
-    fontSize: 12,
-  },
-  metadataNote: { color: '#6B7280', fontSize: 12, lineHeight: 17 },
 });

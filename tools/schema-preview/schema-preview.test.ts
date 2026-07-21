@@ -29,6 +29,7 @@ import {
   buildMobileScoreSummary,
   rgbaPixelsToGrayscaleImage,
 } from '../../src/features/bubble-grading/mobile-bubble-grading';
+import { buildMobileGradingDiagnosticRecord } from '../../src/features/bubble-grading/mobile-grading-diagnostic-record';
 import {
   buildMobileQuestionReview,
   scaledBubbleFrame,
@@ -281,6 +282,118 @@ test('builds the first mobile score summary from a deterministic grading-result 
     provisional: true,
     reviewReasonCodes: ['excessive_blur'],
   });
+});
+
+test('builds complete scan, bubble, and question diagnostic records with explanations', () => {
+  const record = buildMobileGradingDiagnosticRecord(
+    {
+      status: 'graded',
+      scanDiagnostics: {
+        studentId: 'student-7',
+        sheetId: 'sheet-22',
+        testId: 'test-3',
+        schemaVersion: '1',
+      },
+      result: mobileGradingResultFixture,
+    },
+    { width: 875, height: 1280 },
+  );
+
+  assert.deepEqual(record.scan.canonicalDimensions, {
+    expected: { width: 875, height: 1280 },
+    measured: { width: 875, height: 1280 },
+    matchesExpected: true,
+  });
+  assert.deepEqual(record.scan.qrMetadata, {
+    studentId: 'student-7',
+    sheetId: 'sheet-22',
+    testId: 'test-3',
+    schemaVersion: '1',
+  });
+  assert.equal(record.scan.bubbleCount, 2);
+  assert.equal(record.scan.totalAnalysisTimeMs, null);
+  assert.deepEqual(record.scan.globalQuality, {
+    averageBackgroundBrightness: 0.94,
+    minimumFocusScore: 0.0005,
+    decisionCounts: { filled: 1, unfilled: 0, uncertain: 1 },
+  });
+  assert.deepEqual(record.scan.reviewReasons, [
+    {
+      code: 'excessive_blur',
+      explanation:
+        'A evidência de foco desta região ficou abaixo do limite provisório de nitidez.',
+    },
+  ]);
+
+  const blurredBubble = record.bubbles[1];
+  assert.deepEqual(blurredBubble.blurEvidence, {
+    focusScore: 0.0005,
+    minimumFocusScore: 0.0015,
+    passesMinimum: false,
+  });
+  assert.deepEqual(blurredBubble.expectedCenterPx, { x: 100, y: 100 });
+  assert.deepEqual(blurredBubble.measuredCenterPx, { x: 100, y: 100 });
+  assert.deepEqual(blurredBubble.centerAdjustmentPx, { x: 0, y: 0, distance: 0 });
+  assert.equal(blurredBubble.interiorBrightness, 0.7);
+  assert.equal(blurredBubble.backgroundBrightness, 0.94);
+  assert.equal(blurredBubble.darkPixelRatio, 0.35);
+  assert.equal(blurredBubble.contrast, 0.24);
+  assert.equal(blurredBubble.decision, 'uncertain');
+  assert.equal(blurredBubble.confidence, 0.25);
+  assert.equal(blurredBubble.reasons[0].code, 'excessive_blur');
+
+  const reviewQuestion = record.questions[1];
+  assert.deepEqual(reviewQuestion.detectedBubbleIds, []);
+  assert.deepEqual(reviewQuestion.correctBubbleIds, ['q2-b']);
+  assert.equal(reviewQuestion.exactSetMatch, false);
+  assert.equal(reviewQuestion.status, 'needs_review');
+  assert.equal(reviewQuestion.awardedPoints, 0);
+  assert.equal(reviewQuestion.pendingPoints, 3);
+  assert.equal(reviewQuestion.confidence, 0.25);
+  assert.equal(
+    reviewQuestion.reasons[0].code,
+    'uncertain_bubbles_could_change_outcome',
+  );
+  assert.deepEqual(
+    reviewQuestion.contributingBubbleReasons.map((contribution) => ({
+      bubbleId: contribution.bubbleId,
+      codes: contribution.reasons.map((reason) => reason.code),
+    })),
+    [{ bubbleId: 'q2-b', codes: ['excessive_blur'] }],
+  );
+});
+
+test('keeps clear extra selections diagnostically distinct from uncertain measurements', () => {
+  const bubbles = diagnosticsFor(validSchemaFixture, {
+    'q1-a': 'filled',
+    'q1-b': 'filled',
+  });
+  const grading = gradeBubbleDiagnostics(validSchemaFixture, bubbles);
+  const record = buildMobileGradingDiagnosticRecord(
+    {
+      status: 'graded',
+      scanDiagnostics: {
+        studentId: null,
+        sheetId: null,
+        testId: null,
+        schemaVersion: null,
+      },
+      result: {
+        ...mobileGradingResultFixture,
+        bubbles,
+        questions: grading.questions,
+        score: grading.score,
+      },
+    },
+    { width: 875, height: 1280 },
+  );
+  const question = record.questions[0];
+
+  assert.equal(question.status, 'incorrect');
+  assert.equal(question.pendingPoints, 0);
+  assert.equal(question.exactSetMatch, false);
+  assert.deepEqual(question.reasons.map((reason) => reason.code), ['extra_selection']);
+  assert.match(question.reasons[0].explanation, /claramente preenchidas/);
 });
 
 test('builds human-labelled visual question review without changing grading diagnostics', () => {

@@ -6,6 +6,12 @@ Each valid page has three evenly spaced black squares in each vertical margin. S
 
 The inward-facing corners of the four outer markers detected in the accepted still photograph create a perspective- and rotation-corrected 875 × 1280 image. Those user-reviewed dimensions and their aspect ratio are shared by the perspective surface and the hardcoded grading schema; the crop is rendered directly at that size, never normalized by a later resize. Any schema/image dimension mismatch is reported as a canonical-contract error. The normalized image is scanned locally for a QR code, and an upside-down page is automatically rotated 180 degrees using the QR orientation. The camera pauses while the clean JPEG and metadata are displayed in a zoomable full-screen modal.
 
+The result screen grades the hardcoded schema by exact selected-set equality,
+keeps uncertain points pending, provides clean and annotated views, and exposes
+an expandable technical diagnostic record that is collapsed by default. See
+[`PHASE_08_PROTOTYPE_REVIEW.md`](./PHASE_08_PROTOTYPE_REVIEW.md) for the
+provisional detector calibration workflow and final physical-iPhone checklist.
+
 The QR describes the individual sheet only. Bubble positions and the answer key use the shared schema contract in `src/features/bubble-grading/schema.ts`. All schema layout values use a top-left origin and pixels of the clean canonical crop; the app and OpenCV do not convert PDF units.
 
 ## Preview a grading schema

@@ -9,25 +9,17 @@ import {
   type ImageDimensions,
   type SchemaValidationError,
 } from './schema-validator';
+import {
+  PROVISIONAL_BUBBLE_DETECTOR_CONFIG,
+  type BubbleDetectorConfig,
+} from './bubble-detector-config';
+
+export {
+  PROVISIONAL_BUBBLE_DETECTOR_CONFIG,
+  type BubbleDetectorConfig,
+} from './bubble-detector-config';
 
 export const BUBBLE_DIAGNOSTIC_FORMAT_VERSION = 1 as const;
-
-/**
- * Camera- and pen-dependent prototype values. These deliberately live outside
- * the generator-owned schema and must be calibrated against physical sheets.
- */
-export const PROVISIONAL_BUBBLE_DETECTOR_CONFIG = Object.freeze({
-  id: 'provisional-physical-calibration-required-v1',
-  provisional: true as const,
-  darkPixelDelta: 0.1,
-  unfilledMaxDarkPixelRatio: 0.18,
-  filledMinDarkPixelRatio: 0.52,
-  minimumBackgroundBrightness: 0.45,
-  minimumMarkedContrast: 0.08,
-  minimumFocusScore: 0.0015,
-});
-
-export type BubbleDetectorConfig = typeof PROVISIONAL_BUBBLE_DETECTOR_CONFIG;
 export type BubbleDecision = 'filled' | 'unfilled' | 'uncertain';
 export type BubbleReasonCode =
   | 'center_adjusted'

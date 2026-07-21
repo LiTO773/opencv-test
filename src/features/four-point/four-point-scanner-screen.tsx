@@ -18,6 +18,7 @@ import { useCameraDevice, useCameraPermission } from 'react-native-vision-camera
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { MobileGradingSummary } from '@/features/bubble-grading/mobile-grading-summary';
+import { MobileGradingDiagnostics } from '@/features/bubble-grading/mobile-grading-diagnostics';
 import { MobileVisualQuestionReview } from '@/features/bubble-grading/mobile-visual-question-review';
 import { FourPointCamera } from '@/features/four-point/four-point-camera';
 import { shareCleanScan } from '@/features/four-point/share-clean-scan';
@@ -334,6 +335,11 @@ function ScannerCamera() {
                     }}
                   />
                 )}
+                <MobileGradingDiagnostics
+                  imageHeight={capturedScan.height}
+                  imageWidth={capturedScan.width}
+                  outcome={capturedScan.grading}
+                />
                 <Pressable
                   accessibilityLabel="Partilhar a fotografia JPEG limpa"
                   accessibilityRole="button"
