@@ -1,8 +1,10 @@
 import type { PointVector } from 'react-native-fast-opencv';
 import {
   AdaptiveThresholdTypes,
+  BorderTypes,
   ColorConversionCodes,
   ContourApproximationModes,
+  DataTypes,
   MorphShapes,
   MorphTypes,
   ObjectType,
@@ -11,7 +13,11 @@ import {
   ThresholdTypes,
 } from 'react-native-fast-opencv';
 
-import type { DocumentQuadrilateral, Point2D } from '@/features/document-scanner/types';
+import type {
+  DocumentAnalysis,
+  DocumentQuadrilateral,
+  Point2D,
+} from '@/features/document-scanner/types';
 
 export const ANALYSIS_WIDTH = 500;
 export const ANALYSIS_HEIGHT = 667;
@@ -306,17 +312,52 @@ export function mapAnalysisToFrame(
   };
 }
 
-export function detectDocument(pixelBuffer: ArrayBuffer): DocumentQuadrilateral | null {
+function calculateSharpness(grayscale: ReturnType<typeof OpenCV.bufferToMat>) {
+  'worklet';
+  // Ignore the side strips containing the large black markers. Otherwise the
+  // markers could make a motion-blurred answer area appear artificially sharp.
+  const x = Math.round(ANALYSIS_WIDTH * 0.2);
+  const y = Math.round(ANALYSIS_HEIGHT * 0.1);
+  const width = Math.round(ANALYSIS_WIDTH * 0.6);
+  const height = Math.round(ANALYSIS_HEIGHT * 0.8);
+  const region = OpenCV.createObject(ObjectType.Mat, height, width, DataTypes.CV_8U);
+  const rectangle = OpenCV.createObject(ObjectType.Rect, x, y, width, height);
+  OpenCV.invoke('crop', grayscale, region, rectangle);
+
+  const laplacian = OpenCV.createObject(ObjectType.Mat, height, width, DataTypes.CV_64F);
+  OpenCV.invoke(
+    'Laplacian',
+    region,
+    laplacian,
+    DataTypes.CV_64F,
+    3,
+    1,
+    0,
+    BorderTypes.BORDER_DEFAULT,
+  );
+  const mean = OpenCV.createObject(ObjectType.Mat, 1, 1, DataTypes.CV_64F);
+  const standardDeviation = OpenCV.createObject(ObjectType.Mat, 1, 1, DataTypes.CV_64F);
+  OpenCV.invoke('meanStdDev', laplacian, mean, standardDeviation);
+  const deviation = OpenCV.matToBuffer(standardDeviation, 'float64').buffer[0] ?? 0;
+  return deviation * deviation;
+}
+
+function analyzeDocumentPixels(
+  pixelBuffer: ArrayBuffer,
+  channels: 3 | 4,
+  grayscaleConversion: ColorConversionCodes,
+): DocumentAnalysis | null {
   'worklet';
   try {
     const source = OpenCV.bufferToMat(
       'uint8',
       ANALYSIS_HEIGHT,
       ANALYSIS_WIDTH,
-      3,
+      channels,
       new Uint8Array(pixelBuffer),
     );
-    OpenCV.invoke('cvtColor', source, source, ColorConversionCodes.COLOR_BGR2GRAY);
+    OpenCV.invoke('cvtColor', source, source, grayscaleConversion);
+    const sharpness = calculateSharpness(source);
     OpenCV.invoke('GaussianBlur', source, source, OpenCV.createObject(ObjectType.Size, 5, 5), 0);
     OpenCV.invoke(
       'adaptiveThreshold',
@@ -375,8 +416,18 @@ export function detectDocument(pixelBuffer: ArrayBuffer): DocumentQuadrilateral 
         }
       }
     }
-    return bestArea;
+    return bestArea ? { quadrilateral: bestArea, sharpness } : null;
   } finally {
     OpenCV.clearBuffers();
   }
+}
+
+export function detectDocument(pixelBuffer: ArrayBuffer): DocumentAnalysis | null {
+  'worklet';
+  return analyzeDocumentPixels(pixelBuffer, 3, ColorConversionCodes.COLOR_BGR2GRAY);
+}
+
+export function detectDocumentFromRgba(pixelBuffer: ArrayBuffer): DocumentAnalysis | null {
+  'worklet';
+  return analyzeDocumentPixels(pixelBuffer, 4, ColorConversionCodes.COLOR_RGBA2GRAY);
 }

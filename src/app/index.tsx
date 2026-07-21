@@ -1,5 +1,5 @@
-import { DocumentScannerScreen } from '@/features/document-scanner/document-scanner-screen';
+import { FourPointScannerScreen } from '@/features/four-point/four-point-scanner-screen';
 
 export default function HomeScreen() {
-  return <DocumentScannerScreen />;
+  return <FourPointScannerScreen />;
 }

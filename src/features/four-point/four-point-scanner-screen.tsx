@@ -17,8 +17,11 @@ import {
 import { useCameraDevice, useCameraPermission } from 'react-native-vision-camera';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { DocumentCamera } from '@/features/document-scanner/document-camera';
-import type { DocumentScan, ScanState } from '@/features/document-scanner/types';
+import { FourPointCamera } from '@/features/four-point/four-point-camera';
+import type {
+  FourPointScan,
+  FourPointScanState,
+} from '@/features/four-point/types';
 
 function useIsAppActive() {
   const [isActive, setIsActive] = useState(AppState.currentState === 'active');
@@ -68,15 +71,20 @@ function ScannerCamera() {
   const device = useCameraDevice('back');
   const isAppActive = useIsAppActive();
   const { width: windowWidth } = useWindowDimensions();
-  const [scanState, setScanState] = useState<ScanState>('searching');
+  const [scanState, setScanState] = useState<FourPointScanState>('searching');
+  const [markerCount, setMarkerCount] = useState(0);
   const [processorError, setProcessorError] = useState<string | null>(null);
-  const [capturedScan, setCapturedScan] = useState<DocumentScan | null>(null);
+  const [capturedScan, setCapturedScan] = useState<FourPointScan | null>(null);
   const [scanSession, setScanSession] = useState(0);
   const [torchEnabled, setTorchEnabled] = useState(false);
 
-  const handleScanStateChange = useCallback((state: ScanState) => {
+  const handleScanStateChange = useCallback((state: FourPointScanState) => {
     setScanState(state);
-    if (state === 'hold-steady' || state === 'improve-focus') setProcessorError(null);
+    if (state === 'ready') setProcessorError(null);
+  }, []);
+  const handleMarkerCountChange = useCallback((count: number) => {
+    setMarkerCount(count);
+    if (count > 0) setProcessorError(null);
   }, []);
   const handleProcessorError = useCallback((message: string) => {
     setProcessorError(message);
@@ -85,13 +93,14 @@ function ScannerCamera() {
     setTorchEnabled(false);
     setProcessorError(`Não foi possível controlar o flash: ${message}`);
   }, []);
-  const handleCropCaptured = useCallback((scan: DocumentScan) => {
+  const handleCropCaptured = useCallback((scan: FourPointScan) => {
     setTorchEnabled(false);
     setProcessorError(null);
     setCapturedScan(scan);
   }, []);
   const handleCloseCrop = useCallback(() => {
     setCapturedScan(null);
+    setMarkerCount(0);
     setScanState('searching');
     setScanSession((session) => session + 1);
   }, []);
@@ -105,14 +114,24 @@ function ScannerCamera() {
     );
   }
 
+  const statusLabel =
+    scanState === 'capturing'
+      ? 'A capturar fotografia'
+      : scanState === 'ready'
+        ? '4 marcadores encontrados'
+        : markerCount === 4
+          ? 'Alinhe os quatro marcadores'
+          : `${markerCount}/4 marcadores`;
+
   return (
     <View style={styles.cameraScreen}>
       <StatusBar style="light" />
-      <DocumentCamera
+      <FourPointCamera
         key={scanSession}
         device={device}
         isActive={isAppActive && !capturedScan}
         onCropCaptured={handleCropCaptured}
+        onMarkerCountChange={handleMarkerCountChange}
         onProcessorError={handleProcessorError}
         onScanStateChange={handleScanStateChange}
         onTorchError={handleTorchError}
@@ -135,21 +154,15 @@ function ScannerCamera() {
               styles.statusDot,
               scanState === 'capturing'
                 ? styles.statusDotCapturing
-                : scanState === 'improve-focus'
-                  ? styles.statusDotFocus
-                : scanState === 'hold-steady'
-                  ? styles.statusDotDetected
-                  : styles.statusDotSearching,
+                : scanState === 'ready'
+                  ? styles.statusDotReady
+                  : markerCount > 0
+                    ? styles.statusDotPartial
+                    : styles.statusDotSearching,
             ]}
           />
           <Text selectable style={styles.statusText}>
-            {scanState === 'capturing'
-              ? 'A capturar fotografia nítida'
-              : scanState === 'improve-focus'
-                ? 'Melhore a nitidez'
-              : scanState === 'hold-steady'
-                ? 'Mantenha imóvel'
-                : 'À procura dos 6 marcadores'}
+            {statusLabel}
           </Text>
         </GlassView>
       </View>
@@ -195,21 +208,23 @@ function ScannerCamera() {
         <GlassView colorScheme="dark" glassEffectStyle="regular" style={styles.instructionCard}>
           <Text selectable style={styles.instructionTitle}>
             {scanState === 'capturing'
-              ? 'A validar a fotografia'
-              : scanState === 'improve-focus'
-                ? 'A folha ainda está desfocada'
-              : scanState === 'hold-steady'
+              ? 'A corrigir a perspetiva'
+              : scanState === 'ready'
                 ? 'Folha detetada'
-                : 'Enquadre os seis quadrados'}
+                : markerCount === 4
+                  ? 'Ajuste ligeiramente o enquadramento'
+                  : markerCount > 0
+                    ? 'Continue a alinhar a folha'
+                    : 'Coloque um quadrado preto em cada área'}
           </Text>
           <Text selectable style={styles.instructionBody}>
             {scanState === 'capturing'
-              ? 'A confirmar os marcadores e a nitidez na fotografia final…'
-              : scanState === 'improve-focus'
-                ? 'Aproxime-se um pouco, melhore a luz e mantenha o telemóvel imóvel.'
-              : scanState === 'hold-steady'
-                ? 'Não mova a folha nem o telemóvel. A captura será automática.'
-                : 'Inclua os três quadrados de cada margem. A área útil entre os marcadores será destacada.'}
+              ? 'A fotografia será recortada pelos limites exteriores dos quatro marcadores.'
+              : scanState === 'ready'
+                ? 'A captura é automática assim que a segunda leitura confirmar os marcadores.'
+                : markerCount === 4
+                  ? 'Os quatro quadrados foram vistos, mas ainda não formam uma página vertical válida.'
+                  : 'Cada área funciona de forma independente e fica verde quando encontra o seu marcador.'}
           </Text>
         </GlassView>
       </View>
@@ -233,12 +248,18 @@ function ScannerCamera() {
         <View style={styles.cropModal}>
           <View style={[styles.cropHeader, { paddingTop: insets.top + 10 }]}>
             <View style={styles.cropHeaderCopy}>
-              <Text selectable style={styles.cropTitle}>Folha A4 normalizada</Text>
-              <Text selectable style={styles.cropSubtitle}>840 × 1188 px · perspetiva corrigida</Text>
+              <Text selectable style={styles.cropTitle}>
+                Folha recortada
+              </Text>
+              <Text selectable style={styles.cropSubtitle}>
+                {capturedScan
+                  ? `${capturedScan.width} × ${capturedScan.height} px · perspetiva corrigida`
+                  : 'Perspetiva corrigida'}
+              </Text>
             </View>
             <GlassView isInteractive style={styles.closeGlassButton}>
               <Pressable
-                accessibilityLabel="Fechar conteúdo e digitalizar novamente"
+                accessibilityLabel="Fechar fotografia e digitalizar novamente"
                 accessibilityRole="button"
                 onPress={handleCloseCrop}
                 style={styles.closeButton}
@@ -256,44 +277,15 @@ function ScannerCamera() {
             minimumZoomScale={1}
           >
             {capturedScan ? (
-              <>
-                <Image
-                  accessibilityLabel="Folha A4 corrigida"
-                  resizeMode="contain"
-                  source={{ uri: capturedScan.imageUri }}
-                  style={{
-                    width: windowWidth - 32,
-                    height: (windowWidth - 32) * (297 / 210),
-                  }}
-                />
-                <View style={styles.qrCard}>
-                  <Text selectable style={styles.qrTitle}>
-                    {capturedScan.qr ? 'QR lido' : 'QR não encontrado'}
-                  </Text>
-                  {capturedScan.qr ? (
-                    <>
-                      <Text selectable style={styles.qrMetadata}>
-                        {capturedScan.qr.payloadFormat === 'json'
-                          ? JSON.stringify(capturedScan.qr.payload, null, 2)
-                          : capturedScan.qr.rawValue}
-                      </Text>
-                      <Text selectable style={styles.qrDetails}>
-                        QR v{capturedScan.qr.qrVersion}
-                        {capturedScan.qr.rotationApplied === 180
-                          ? ' · folha rodada automaticamente 180°'
-                          : ''}
-                      </Text>
-                    </>
-                  ) : (
-                    <Text selectable style={styles.qrDetails}>
-                      A imagem foi normalizada, mas não foi possível descodificar um QR.
-                    </Text>
-                  )}
-                  <Text selectable style={styles.qrDetails}>
-                    Nitidez da fotografia: {Math.round(capturedScan.quality.sharpness)}
-                  </Text>
-                </View>
-              </>
+              <Image
+                accessibilityLabel="Fotografia da folha recortada e com perspetiva corrigida"
+                resizeMode="contain"
+                source={{ uri: capturedScan.imageUri }}
+                style={{
+                  width: windowWidth - 32,
+                  height: (windowWidth - 32) * (capturedScan.height / capturedScan.width),
+                }}
+              />
             ) : null}
           </ScrollView>
           <View style={{ height: insets.bottom }} />
@@ -303,7 +295,7 @@ function ScannerCamera() {
   );
 }
 
-export function DocumentScannerScreen() {
+export function FourPointScannerScreen() {
   const { canRequestPermission, hasPermission, requestPermission } = useCameraPermission();
   const [permissionError, setPermissionError] = useState<string | null>(null);
 
@@ -320,7 +312,7 @@ export function DocumentScannerScreen() {
   if (canRequestPermission) {
     return (
       <View style={styles.loadingScreen}>
-        <ActivityIndicator color="#14B8A6" size="large" />
+        <ActivityIndicator color="#22C55E" size="large" />
         <Text selectable style={styles.loadingText}>
           A pedir acesso à câmara…
         </Text>
@@ -369,8 +361,8 @@ const styles = StyleSheet.create({
   },
   statusDot: { width: 9, height: 9, borderRadius: 5 },
   statusDotSearching: { backgroundColor: '#FBBF24' },
-  statusDotDetected: { backgroundColor: '#5EEAD4' },
-  statusDotFocus: { backgroundColor: '#FB923C' },
+  statusDotPartial: { backgroundColor: '#A7F3D0' },
+  statusDotReady: { backgroundColor: '#22C55E' },
   statusDotCapturing: { backgroundColor: '#60A5FA' },
   statusText: { color: '#FFFFFF', fontSize: 14, fontWeight: '700' },
   flashOverlay: { position: 'absolute', right: 18 },
@@ -440,7 +432,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
     borderRadius: 14,
     borderCurve: 'continuous',
-    backgroundColor: '#0F766E',
+    backgroundColor: '#15803D',
   },
   primaryButtonText: { color: '#FFFFFF', fontSize: 16, fontWeight: '700' },
   loadingScreen: {
@@ -471,29 +463,11 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(255, 255, 255, 0.66)',
   },
   closeButton: { minHeight: 44, justifyContent: 'center', paddingHorizontal: 15 },
-  closeButtonText: { color: '#0F766E', fontSize: 14, fontWeight: '700' },
+  closeButtonText: { color: '#15803D', fontSize: 14, fontWeight: '700' },
   cropScrollContent: {
     flexGrow: 1,
     alignItems: 'center',
     justifyContent: 'center',
     padding: 16,
-    gap: 16,
   },
-  qrCard: {
-    width: '100%',
-    maxWidth: 560,
-    gap: 8,
-    padding: 16,
-    borderRadius: 18,
-    borderCurve: 'continuous',
-    backgroundColor: '#FFFFFF',
-  },
-  qrTitle: { color: '#111827', fontSize: 17, fontWeight: '700' },
-  qrMetadata: {
-    color: '#1F2937',
-    fontFamily: 'monospace',
-    fontSize: 13,
-    lineHeight: 18,
-  },
-  qrDetails: { color: '#6B7280', fontSize: 13, lineHeight: 18 },
 });

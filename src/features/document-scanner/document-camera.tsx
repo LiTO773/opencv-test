@@ -1,6 +1,10 @@
 /* eslint-disable react-hooks/immutability -- Reanimated shared values are mutable worklet state. */
 import {
+  AlphaType,
+  ColorType,
+  FilterMode,
   ImageFormat,
+  MipmapMode,
   PaintStyle,
   Skia,
   StrokeCap,
@@ -9,10 +13,16 @@ import {
   type SkCanvas,
   type SkImage,
 } from '@shopify/react-native-skia';
-import { useCallback, useEffect, useRef } from 'react';
+import { useCallback, useEffect, useMemo, useRef } from 'react';
 import { StyleSheet } from 'react-native';
 import { useSharedValue } from 'react-native-reanimated';
-import type { Frame, TorchMode } from 'react-native-vision-camera';
+import {
+  CommonResolutions,
+  usePhotoOutput,
+  type Frame,
+  type Photo,
+  type TorchMode,
+} from 'react-native-vision-camera';
 import { useResizer } from 'react-native-vision-camera-resizer';
 import { SkiaCamera, type SkiaCameraRef } from 'react-native-vision-camera-skia';
 import { scheduleOnRN } from 'react-native-worklets';
@@ -21,16 +31,30 @@ import {
   ANALYSIS_HEIGHT,
   ANALYSIS_WIDTH,
   detectDocument,
+  detectDocumentFromRgba,
   mapAnalysisToFrame,
   smoothQuadrilateral,
 } from '@/features/document-scanner/document-detection';
-import type { DocumentQuadrilateral } from '@/features/document-scanner/types';
+import { readQrMetadata } from '@/features/document-scanner/qr-reader';
+import type {
+  DocumentQuadrilateral,
+  DocumentScan,
+  QrMetadata,
+  ScanState,
+} from '@/features/document-scanner/types';
 
 const DETECTION_INTERVAL_FRAMES = 4;
-const DETECTIONS_BEFORE_CAPTURE = 1;
+const STABLE_DETECTIONS_BEFORE_CAPTURE = 5;
 const MISSES_BEFORE_CLEARING = 4;
-const CAPTURE_WIDTH = 840;
-const CAPTURE_HEIGHT = 1188;
+const MAX_STABLE_CORNER_MOVEMENT = ANALYSIS_WIDTH * 0.01;
+const MIN_PREVIEW_SHARPNESS = 65;
+const MIN_CAPTURE_SHARPNESS = 75;
+export const A4_WIDTH_MM = 210;
+export const A4_HEIGHT_MM = 297;
+export const A4_PIXELS_PER_MM = 4;
+export const A4_IMAGE_WIDTH = A4_WIDTH_MM * A4_PIXELS_PER_MM;
+export const A4_IMAGE_HEIGHT = A4_HEIGHT_MM * A4_PIXELS_PER_MM;
+const EDGE_CLEANUP_PX = A4_PIXELS_PER_MM;
 
 const documentFill = Skia.Paint();
 documentFill.setStyle(PaintStyle.Fill);
@@ -43,15 +67,34 @@ documentBorder.setStrokeCap(StrokeCap.Round);
 documentBorder.setStrokeJoin(StrokeJoin.Round);
 documentBorder.setColor(Skia.Color('#5EEAD4'));
 
+const pageEdgeCleanup = Skia.Paint();
+pageEdgeCleanup.setStyle(PaintStyle.Fill);
+pageEdgeCleanup.setColor(Skia.Color('#FFFFFF'));
+
 type DocumentCameraProps = {
   device: NonNullable<ReturnType<typeof import('react-native-vision-camera').useCameraDevice>>;
   isActive: boolean;
-  onDetectionChange: (detected: boolean) => void;
-  onCropCaptured: (imageUri: string) => void;
+  onCropCaptured: (scan: DocumentScan) => void;
   onProcessorError: (message: string) => void;
+  onScanStateChange: (state: ScanState) => void;
   onTorchError: (message: string) => void;
   torchMode: TorchMode;
 };
+
+function maximumCornerMovement(
+  previous: DocumentQuadrilateral,
+  next: DocumentQuadrilateral,
+) {
+  'worklet';
+  let maximum = 0;
+  for (let index = 0; index < previous.length; index += 1) {
+    maximum = Math.max(
+      maximum,
+      Math.hypot(previous[index].x - next[index].x, previous[index].y - next[index].y),
+    );
+  }
+  return maximum;
+}
 
 function drawDetectedDocument(
   canvas: SkCanvas,
@@ -121,57 +164,226 @@ function solveHomography(
   ];
 }
 
-function cropSnapshot(
+function cleanNormalizedPageEdges(canvas: SkCanvas) {
+  canvas.drawRect(Skia.XYWHRect(0, 0, A4_IMAGE_WIDTH, EDGE_CLEANUP_PX), pageEdgeCleanup);
+  canvas.drawRect(
+    Skia.XYWHRect(0, A4_IMAGE_HEIGHT - EDGE_CLEANUP_PX, A4_IMAGE_WIDTH, EDGE_CLEANUP_PX),
+    pageEdgeCleanup,
+  );
+  canvas.drawRect(Skia.XYWHRect(0, 0, EDGE_CLEANUP_PX, A4_IMAGE_HEIGHT), pageEdgeCleanup);
+  canvas.drawRect(
+    Skia.XYWHRect(A4_IMAGE_WIDTH - EDGE_CLEANUP_PX, 0, EDGE_CLEANUP_PX, A4_IMAGE_HEIGHT),
+    pageEdgeCleanup,
+  );
+}
+
+function readQrFromImage(image: SkImage) {
+  const pixels = image.readPixels(0, 0, {
+    alphaType: AlphaType.Unpremul,
+    colorType: ColorType.RGBA_8888,
+    width: A4_IMAGE_WIDTH,
+    height: A4_IMAGE_HEIGHT,
+  });
+  if (!pixels || pixels instanceof Float32Array) return null;
+  return readQrMetadata(
+    new Uint8ClampedArray(pixels.buffer, pixels.byteOffset, pixels.byteLength),
+    A4_IMAGE_WIDTH,
+    A4_IMAGE_HEIGHT,
+  );
+}
+
+function rotatePage180(image: SkImage) {
+  const surface = Skia.Surface.Make(A4_IMAGE_WIDTH, A4_IMAGE_HEIGHT);
+  if (!surface) return null;
+  const canvas = surface.getCanvas();
+  canvas.clear(Skia.Color('#FFFFFF'));
+  canvas.rotate(180, A4_IMAGE_WIDTH / 2, A4_IMAGE_HEIGHT / 2);
+  canvas.drawImage(image, 0, 0);
+  surface.flush();
+  return { image: surface.makeImageSnapshot(), surface };
+}
+
+function normalizeSnapshot(
   snapshot: SkImage,
   quadrilateral: DocumentQuadrilateral,
   frameWidth: number,
   frameHeight: number,
-) {
+  sharpness: number,
+): DocumentScan | null {
   const source = quadrilateral.map((point) =>
     mapAnalysisToFrame(point, frameWidth, frameHeight),
   ) as DocumentQuadrilateral;
   const destination: DocumentQuadrilateral = [
     { x: 0, y: 0 },
-    { x: CAPTURE_WIDTH, y: 0 },
-    { x: CAPTURE_WIDTH, y: CAPTURE_HEIGHT },
-    { x: 0, y: CAPTURE_HEIGHT },
+    { x: A4_IMAGE_WIDTH, y: 0 },
+    { x: A4_IMAGE_WIDTH, y: A4_IMAGE_HEIGHT },
+    { x: 0, y: A4_IMAGE_HEIGHT },
   ];
   const transform = solveHomography(source, destination);
   if (!transform) return null;
 
-  const surface = Skia.Surface.Make(CAPTURE_WIDTH, CAPTURE_HEIGHT);
+  const surface = Skia.Surface.Make(A4_IMAGE_WIDTH, A4_IMAGE_HEIGHT);
   if (!surface) return null;
   try {
     const canvas = surface.getCanvas();
     canvas.clear(Skia.Color('#FFFFFF'));
+    canvas.save();
     canvas.concat(transform);
     canvas.drawImage(snapshot, 0, 0);
+    canvas.restore();
+    cleanNormalizedPageEdges(canvas);
     surface.flush();
 
-    const croppedSnapshot = surface.makeImageSnapshot();
-    const rasterImage = croppedSnapshot.makeNonTextureImage();
-    const image = rasterImage ?? croppedSnapshot;
+    const normalizedSnapshot = surface.makeImageSnapshot();
+    const rasterImage = normalizedSnapshot.makeNonTextureImage();
+    const normalizedImage = rasterImage ?? normalizedSnapshot;
+    const detectedQr = readQrFromImage(normalizedImage);
+    let qr: QrMetadata | null = detectedQr;
+    let rotatedPage: ReturnType<typeof rotatePage180> = null;
     try {
-      return `data:image/jpeg;base64,${image.encodeToBase64(ImageFormat.JPEG, 90)}`;
+      let finalImage = normalizedImage;
+      if (detectedQr?.orientation === 'upside-down') {
+        rotatedPage = rotatePage180(normalizedImage);
+        if (rotatedPage) {
+          finalImage = rotatedPage.image;
+          qr = {
+            ...detectedQr,
+            orientation: 'upright',
+            rotationApplied: 180,
+          };
+        }
+      }
+
+      return {
+        imageUri: `data:image/jpeg;base64,${finalImage.encodeToBase64(ImageFormat.JPEG, 92)}`,
+        width: A4_IMAGE_WIDTH,
+        height: A4_IMAGE_HEIGHT,
+        quality: { sharpness },
+        qr,
+      };
     } finally {
-      if (rasterImage && rasterImage !== croppedSnapshot) rasterImage.dispose();
-      croppedSnapshot.dispose();
+      rotatedPage?.image.dispose();
+      rotatedPage?.surface.dispose();
+      if (rasterImage && rasterImage !== normalizedSnapshot) rasterImage.dispose();
+      normalizedSnapshot.dispose();
     }
   } finally {
     surface.dispose();
   }
 }
 
+function makeStillAnalysisBuffer(image: SkImage) {
+  const surface = Skia.Surface.Make(ANALYSIS_WIDTH, ANALYSIS_HEIGHT);
+  if (!surface) return null;
+  try {
+    const imageWidth = image.width();
+    const imageHeight = image.height();
+    const scale = Math.max(ANALYSIS_WIDTH / imageWidth, ANALYSIS_HEIGHT / imageHeight);
+    const visibleWidth = ANALYSIS_WIDTH / scale;
+    const visibleHeight = ANALYSIS_HEIGHT / scale;
+    const source = Skia.XYWHRect(
+      (imageWidth - visibleWidth) / 2,
+      (imageHeight - visibleHeight) / 2,
+      visibleWidth,
+      visibleHeight,
+    );
+    const destination = Skia.XYWHRect(0, 0, ANALYSIS_WIDTH, ANALYSIS_HEIGHT);
+    const canvas = surface.getCanvas();
+    canvas.clear(Skia.Color('#FFFFFF'));
+    canvas.drawImageRectOptions(
+      image,
+      source,
+      destination,
+      FilterMode.Linear,
+      MipmapMode.None,
+    );
+    surface.flush();
+
+    const analysisImage = surface.makeImageSnapshot();
+    try {
+      const pixels = analysisImage.readPixels(0, 0, {
+        alphaType: AlphaType.Unpremul,
+        colorType: ColorType.RGBA_8888,
+        width: ANALYSIS_WIDTH,
+        height: ANALYSIS_HEIGHT,
+      });
+      if (!pixels || pixels instanceof Float32Array) return null;
+      const copy = new Uint8Array(pixels.byteLength);
+      copy.set(pixels);
+      return copy.buffer;
+    } finally {
+      analysisImage.dispose();
+    }
+  } finally {
+    surface.dispose();
+  }
+}
+
+async function makeSkiaImageFromPhoto(photo: Photo) {
+  // `toImageAsync` physically applies the photo's EXIF orientation before we
+  // inspect pixels, which keeps Android and iOS portrait captures consistent.
+  const orientedImage = await photo.toImageAsync();
+  try {
+    const encodedImage = await orientedImage.toEncodedImageDataAsync('jpg', 95);
+    const data = Skia.Data.fromBytes(new Uint8Array(encodedImage.buffer));
+    const image = Skia.Image.MakeImageFromEncoded(data);
+    if (!image) {
+      data.dispose();
+      throw new Error('Não foi possível descodificar a fotografia final.');
+    }
+    return { data, image };
+  } finally {
+    orientedImage.dispose();
+  }
+}
+
+class CaptureRejectedError extends Error {}
+
+function analyzeAndNormalizeCapturedImage(image: SkImage) {
+  const analysisBuffer = makeStillAnalysisBuffer(image);
+  if (!analysisBuffer) {
+    throw new Error('Não foi possível preparar a fotografia final para análise.');
+  }
+  const analysis = detectDocumentFromRgba(analysisBuffer);
+  if (!analysis) {
+    throw new CaptureRejectedError(
+      'A folha mexeu durante a fotografia. Enquadre novamente os seis quadrados.',
+    );
+  }
+  if (analysis.sharpness < MIN_CAPTURE_SHARPNESS) {
+    throw new CaptureRejectedError(
+      'A fotografia ficou desfocada. Mantenha a folha e o telemóvel imóveis.',
+    );
+  }
+
+  const scan = normalizeSnapshot(
+    image,
+    analysis.quadrilateral,
+    image.width(),
+    image.height(),
+    analysis.sharpness,
+  );
+  if (!scan) throw new Error('Não foi possível normalizar a fotografia A4 final.');
+  return scan;
+}
+
 export function DocumentCamera({
   device,
   isActive,
   onCropCaptured,
-  onDetectionChange,
   onProcessorError,
+  onScanStateChange,
   onTorchError,
   torchMode,
 }: DocumentCameraProps) {
   const cameraRef = useRef<SkiaCameraRef>(null);
+  const photoOutput = usePhotoOutput({
+    containerFormat: 'jpeg',
+    quality: 0.95,
+    qualityPrioritization: 'quality',
+    targetResolution: CommonResolutions.QHD_4_3,
+  });
+  const cameraOutputs = useMemo(() => [photoOutput], [photoOutput]);
   const resizerState = useResizer({
     width: ANALYSIS_WIDTH,
     height: ANALYSIS_HEIGHT,
@@ -182,9 +394,10 @@ export function DocumentCamera({
   });
   const frameCounter = useSharedValue(0);
   const consecutiveMisses = useSharedValue(0);
-  const consecutiveDetections = useSharedValue(0);
+  const consecutiveStableDetections = useSharedValue(0);
   const lastDocument = useSharedValue<DocumentQuadrilateral | null>(null);
-  const lastReportedDetection = useSharedValue(false);
+  const lastRawDocument = useSharedValue<DocumentQuadrilateral | null>(null);
+  const lastReportedScanState = useSharedValue<ScanState>('searching');
   const didReportProcessorError = useSharedValue(false);
   const didCapture = useSharedValue(false);
 
@@ -206,44 +419,49 @@ export function DocumentCamera({
     return () => cancelAnimationFrame(animationFrame);
   }, [isActive, onTorchError, torchMode]);
 
-  const captureDetectedFrame = useCallback(
-    (
-      quadrilateral: DocumentQuadrilateral,
-      frameWidth: number,
-      frameHeight: number,
-    ) => {
-      let attemptsRemaining = 3;
-      const attemptCapture = () => {
-        requestAnimationFrame(() => {
-          const snapshot = cameraRef.current?.takeSnapshot();
-          if (!snapshot) {
-            attemptsRemaining -= 1;
-            if (attemptsRemaining > 0) {
-              attemptCapture();
-            } else {
-              didCapture.value = false;
-              consecutiveDetections.value = 0;
-              onProcessorError('Não foi possível obter a imagem da câmara. Tente novamente.');
-            }
-            return;
-          }
+  const captureFinalPhoto = useCallback(async () => {
+    let photo: Photo | null = null;
+    let decodedPhoto: Awaited<ReturnType<typeof makeSkiaImageFromPhoto>> | null = null;
+    try {
+      photo = await photoOutput.capturePhoto(
+        { enableShutterSound: false, flashMode: 'off' },
+        {},
+      );
+      decodedPhoto = await makeSkiaImageFromPhoto(photo);
+      const scan = analyzeAndNormalizeCapturedImage(decodedPhoto.image);
+      onCropCaptured(scan);
+    } catch (caught) {
+      didCapture.value = false;
+      consecutiveStableDetections.value = 0;
+      consecutiveMisses.value = 0;
+      lastDocument.value = null;
+      lastRawDocument.value = null;
+      lastReportedScanState.value = 'searching';
+      onScanStateChange('searching');
+      onProcessorError(caught instanceof Error ? caught.message : String(caught));
+    } finally {
+      decodedPhoto?.image.dispose();
+      decodedPhoto?.data.dispose();
+      photo?.dispose();
+    }
+  }, [
+    consecutiveMisses,
+    consecutiveStableDetections,
+    didCapture,
+    lastDocument,
+    lastRawDocument,
+    lastReportedScanState,
+    onCropCaptured,
+    onProcessorError,
+    onScanStateChange,
+    photoOutput,
+  ]);
 
-          try {
-            const imageUri = cropSnapshot(snapshot, quadrilateral, frameWidth, frameHeight);
-            if (!imageUri) throw new Error('A superfície do recorte não ficou disponível.');
-            onCropCaptured(imageUri);
-          } catch (caught) {
-            didCapture.value = false;
-            consecutiveDetections.value = 0;
-            onProcessorError(caught instanceof Error ? caught.message : String(caught));
-          } finally {
-            snapshot.dispose();
-          }
-        });
-      };
-      attemptCapture();
+  const reportScanState = useCallback(
+    (state: ScanState) => {
+      onScanStateChange(state);
     },
-    [consecutiveDetections, didCapture, onCropCaptured, onProcessorError],
+    [onScanStateChange],
   );
 
   const processFrame = useCallback(
@@ -261,21 +479,41 @@ export function DocumentCamera({
           try {
             const detected = detectDocument(resizedFrame.getPixelBuffer());
             if (detected) {
-              lastDocument.value = smoothQuadrilateral(lastDocument.value, detected);
-              consecutiveDetections.value += 1;
+              const previous = lastRawDocument.value;
+              const isStable =
+                previous !== null &&
+                maximumCornerMovement(previous, detected.quadrilateral) <=
+                  MAX_STABLE_CORNER_MOVEMENT &&
+                detected.sharpness >= MIN_PREVIEW_SHARPNESS;
+              lastRawDocument.value = detected.quadrilateral;
+              lastDocument.value = smoothQuadrilateral(
+                lastDocument.value,
+                detected.quadrilateral,
+              );
+              consecutiveStableDetections.value = isStable
+                ? consecutiveStableDetections.value + 1
+                : 0;
               consecutiveMisses.value = 0;
-              if (!lastReportedDetection.value) {
-                lastReportedDetection.value = true;
-                scheduleOnRN(onDetectionChange, true);
+              const waitingState: ScanState =
+                detected.sharpness >= MIN_PREVIEW_SHARPNESS
+                  ? 'hold-steady'
+                  : 'improve-focus';
+              if (
+                consecutiveStableDetections.value < STABLE_DETECTIONS_BEFORE_CAPTURE &&
+                lastReportedScanState.value !== waitingState
+              ) {
+                lastReportedScanState.value = waitingState;
+                scheduleOnRN(reportScanState, waitingState);
               }
             } else {
-              consecutiveDetections.value = 0;
+              consecutiveStableDetections.value = 0;
+              lastRawDocument.value = null;
               consecutiveMisses.value += 1;
               if (consecutiveMisses.value >= MISSES_BEFORE_CLEARING) {
                 lastDocument.value = null;
-                if (lastReportedDetection.value) {
-                  lastReportedDetection.value = false;
-                  scheduleOnRN(onDetectionChange, false);
+                if (lastReportedScanState.value !== 'searching') {
+                  lastReportedScanState.value = 'searching';
+                  scheduleOnRN(reportScanState, 'searching');
                 }
               }
             }
@@ -287,7 +525,7 @@ export function DocumentCamera({
         const document = lastDocument.value;
         const shouldCapture =
           document !== null &&
-          consecutiveDetections.value >= DETECTIONS_BEFORE_CAPTURE &&
+          consecutiveStableDetections.value >= STABLE_DETECTIONS_BEFORE_CAPTURE &&
           !didCapture.value;
         render(({ canvas, frameTexture }) => {
           'worklet';
@@ -298,10 +536,12 @@ export function DocumentCamera({
         });
         if (shouldCapture && document) {
           didCapture.value = true;
-          scheduleOnRN(captureDetectedFrame, document, frame.width, frame.height);
+          lastReportedScanState.value = 'capturing';
+          scheduleOnRN(reportScanState, 'capturing');
+          scheduleOnRN(captureFinalPhoto);
         }
       } catch (caught) {
-        consecutiveDetections.value = 0;
+        consecutiveStableDetections.value = 0;
         render(({ canvas, frameTexture }) => {
           'worklet';
           canvas.drawImage(frameTexture, 0, 0);
@@ -317,15 +557,16 @@ export function DocumentCamera({
     },
     [
       consecutiveMisses,
-      consecutiveDetections,
-      captureDetectedFrame,
+      consecutiveStableDetections,
+      captureFinalPhoto,
       didCapture,
       didReportProcessorError,
       frameCounter,
       lastDocument,
-      lastReportedDetection,
-      onDetectionChange,
+      lastRawDocument,
+      lastReportedScanState,
       onProcessorError,
+      reportScanState,
       resizerState.resizer,
     ],
   );
@@ -339,6 +580,7 @@ export function DocumentCamera({
       isActive={isActive}
       onError={(error) => onProcessorError(error.message)}
       onFrame={processFrame}
+      outputs={cameraOutputs}
       pixelFormat="yuv"
       style={StyleSheet.absoluteFill}
       torchMode={torchMode}
