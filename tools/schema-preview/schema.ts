@@ -1,60 +1,156 @@
-import {
-  A4_HEIGHT_PT,
-  A4_WIDTH_PT,
-  type TestSchema,
-} from '../../src/features/document-scanner/test-schema';
+import type { BubbleGradingSchema } from "../../src/features/bubble-grading/schema";
 
 /**
- * This is the one hardcoded file your PDF script should update.
+ * Fixed generator handoff. Replace this object and input.jpg, then keep
+ * `pnpm schema:preview --watch` running while coordinates are refined.
  *
- * The example uses the common PDF convention: (0, 0) is the bottom-left.
- * Replace the four capture anchors with the exact PDF coordinates of the
- * inward-facing corners of the four outer black markers. Their order is
- * always visual: top-left, top-right, bottom-right, bottom-left.
+ * Canonical dimensions are deliberately unresolved until the crop contract is
+ * locked. In this state only the workbench may resolve them from input.jpg.
  */
-export const testSchema: TestSchema = {
-  id: 'replace-with-your-test-id',
-  version: 1,
-  page: {
-    widthPt: A4_WIDTH_PT,
-    heightPt: A4_HEIGHT_PT,
-    origin: 'bottom-left',
-    captureAnchorsPt: [
-      { x: 0, y: A4_HEIGHT_PT },
-      { x: A4_WIDTH_PT, y: A4_HEIGHT_PT },
-      { x: A4_WIDTH_PT, y: 0 },
-      { x: 0, y: 0 },
-    ],
-    qrRegionPt: {
-      x: 36,
-      y: A4_HEIGHT_PT - 108,
-      width: 72,
-      height: 72,
+export const schema: BubbleGradingSchema = {
+  formatVersion: 1,
+  test: {
+    id: "ABCD",
+    version: "draft-1",
+  },
+  canonicalImage: {
+    coordinateSystem: "canonical-crop-pixels",
+    origin: "top-left",
+    dimensions: {
+      status: "fixed",
+      widthPx: 875,
+      heightPx: 1280,
     },
+    pixelsPerMillimeter: 4,
+  },
+  qrRegionPx: {
+    x: 700,
+    y: 10,
+    width: 170,
+    height: 170,
+  },
+  bubbleStyle: {
+    radiusPx: 10,
   },
   questions: [
     {
-      id: 'question-1',
-      selection: 'single',
-      points: 1,
-      correctBubbleIds: ['a'],
+      id: "1-luna",
+      label: "1 Luna",
+      selectionMode: "multiple",
+      points: 2,
+      correctBubbleIds: ["1-luna-5", "1-luna-7"],
       bubbles: [
-        { id: 'a', label: 'A', centerPt: { x: 180, y: 610 }, radiusPt: 9 },
-        { id: 'b', label: 'B', centerPt: { x: 230, y: 610 }, radiusPt: 9 },
-        { id: 'c', label: 'C', centerPt: { x: 280, y: 610 }, radiusPt: 9 },
-        { id: 'd', label: 'D', centerPt: { x: 330, y: 610 }, radiusPt: 9 },
+        { id: "1-luna-1", label: "1", centerPx: { x: 152, y: 524 } },
+        { id: "1-luna-2", label: "2", centerPx: { x: 186, y: 524 } },
+        { id: "1-luna-3", label: "3", centerPx: { x: 219, y: 524 } },
+        { id: "1-luna-4", label: "4", centerPx: { x: 253, y: 524 } },
+        { id: "1-luna-5", label: "5", centerPx: { x: 287, y: 524 } },
+        { id: "1-luna-6", label: "6", centerPx: { x: 321, y: 524 } },
+        { id: "1-luna-7", label: "7", centerPx: { x: 355, y: 524 } },
       ],
     },
     {
-      id: 'question-2',
-      selection: 'multiple',
-      points: 2,
-      correctBubbleIds: ['b', 'd'],
+      id: "1-theo",
+      label: "1 Theo",
+      selectionMode: "multiple",
+      points: 3,
+      correctBubbleIds: ["1-theo-1", "1-theo-3", "1-theo-4"],
       bubbles: [
-        { id: 'a', label: 'A', centerPt: { x: 180, y: 550 }, radiusPt: 9 },
-        { id: 'b', label: 'B', centerPt: { x: 230, y: 550 }, radiusPt: 9 },
-        { id: 'c', label: 'C', centerPt: { x: 280, y: 550 }, radiusPt: 9 },
-        { id: 'd', label: 'D', centerPt: { x: 330, y: 550 }, radiusPt: 9 },
+        { id: "1-theo-1", label: "1", centerPx: { x: 152, y: 557 } },
+        { id: "1-theo-2", label: "2", centerPx: { x: 186, y: 557 } },
+        { id: "1-theo-3", label: "3", centerPx: { x: 219, y: 557 } },
+        { id: "1-theo-4", label: "4", centerPx: { x: 253, y: 557 } },
+        { id: "1-theo-5", label: "5", centerPx: { x: 287, y: 557 } },
+        { id: "1-theo-6", label: "6", centerPx: { x: 321, y: 557 } },
+        { id: "1-theo-7", label: "7", centerPx: { x: 355, y: 557 } },
+      ],
+    },
+    {
+      id: "1-isa",
+      label: "1 Isabella",
+      selectionMode: "multiple",
+      points: 3,
+      correctBubbleIds: ["1-isa-2", "1-isa-6"],
+      bubbles: [
+        { id: "1-isa-1", label: "1", centerPx: { x: 152, y: 590 } },
+        { id: "1-isa-2", label: "2", centerPx: { x: 186, y: 590 } },
+        { id: "1-isa-3", label: "3", centerPx: { x: 219, y: 590 } },
+        { id: "1-isa-4", label: "4", centerPx: { x: 253, y: 590 } },
+        { id: "1-isa-5", label: "5", centerPx: { x: 287, y: 590 } },
+        { id: "1-isa-6", label: "6", centerPx: { x: 321, y: 590 } },
+        { id: "1-isa-7", label: "7", centerPx: { x: 355, y: 590 } },
+      ],
+    },
+    {
+      id: "2.1",
+      label: "2.1",
+      selectionMode: "single",
+      points: 8,
+      correctBubbleIds: ["2.1-a"],
+      bubbles: [
+        { id: "2.1-a", label: "A", centerPx: { x: 152, y: 657 } },
+        { id: "2.1-b", label: "B", centerPx: { x: 186, y: 657 } },
+        { id: "2.1-c", label: "C", centerPx: { x: 219, y: 657 } },
+      ],
+    },
+    {
+      id: "2.2",
+      label: "2.2",
+      selectionMode: "single",
+      points: 8,
+      correctBubbleIds: ["2.2-c"],
+      bubbles: [
+        { id: "2.2-a", label: "A", centerPx: { x: 152, y: 690 } },
+        { id: "2.2-b", label: "B", centerPx: { x: 186, y: 690 } },
+        { id: "2.2-c", label: "C", centerPx: { x: 219, y: 690 } },
+      ],
+    },
+    {
+      id: "2.3",
+      label: "2.3",
+      selectionMode: "single",
+      points: 8,
+      correctBubbleIds: ["2.3-c"],
+      bubbles: [
+        { id: "2.3-a", label: "A", centerPx: { x: 152, y: 723 } },
+        { id: "2.3-b", label: "B", centerPx: { x: 186, y: 723 } },
+        { id: "2.3-c", label: "C", centerPx: { x: 219, y: 723 } },
+      ],
+    },
+    {
+      id: "2.4",
+      label: "2.4",
+      selectionMode: "single",
+      points: 8,
+      correctBubbleIds: ["2.4-b"],
+      bubbles: [
+        { id: "2.4-a", label: "A", centerPx: { x: 152, y: 756 } },
+        { id: "2.4-b", label: "B", centerPx: { x: 186, y: 756 } },
+        { id: "2.4-c", label: "C", centerPx: { x: 219, y: 756 } },
+      ],
+    },
+    {
+      id: "2.5",
+      label: "2.5",
+      selectionMode: "single",
+      points: 8,
+      correctBubbleIds: ["2.5-b"],
+      bubbles: [
+        { id: "2.5-a", label: "A", centerPx: { x: 152, y: 789 } },
+        { id: "2.5-b", label: "B", centerPx: { x: 186, y: 789 } },
+        { id: "2.5-c", label: "C", centerPx: { x: 219, y: 789 } },
+      ],
+    },
+    {
+      id: "2.6",
+      label: "2.6",
+      selectionMode: "single",
+      points: 8,
+      correctBubbleIds: ["2.6-c"],
+      bubbles: [
+        { id: "2.6-a", label: "A", centerPx: { x: 152, y: 823 } },
+        { id: "2.6-b", label: "B", centerPx: { x: 186, y: 823 } },
+        { id: "2.6-c", label: "C", centerPx: { x: 219, y: 823 } },
       ],
     },
   ],

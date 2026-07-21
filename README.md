@@ -6,23 +6,23 @@ Each valid page has three evenly spaced black squares in each vertical margin. S
 
 The inward-facing corners detected in the accepted still photograph create a perspective- and rotation-corrected 840 × 1188 image (four pixels per A4 millimetre). A one-millimetre white edge masks any marker interpolation left at the boundary. The normalized image is then scanned locally for a QR code; JSON payloads are parsed while non-JSON payloads remain available as raw text. An upside-down page is automatically rotated 180 degrees using the QR orientation. The camera pauses while the result and metadata are displayed in a zoomable full-screen modal.
 
-The QR describes the individual sheet only. Bubble positions and the answer key come from a separately preloaded `TestSchema` in `src/features/document-scanner/test-schema.ts`. Its coordinates use PDF points and explicitly declare whether the PDF origin is at the top-left or bottom-left.
+The QR describes the individual sheet only. Bubble positions and the answer key use the shared schema contract in `src/features/bubble-grading/schema.ts`. All schema layout values use a top-left origin and pixels of the clean canonical crop; the app and OpenCV do not convert PDF units.
 
 ## Preview a grading schema
 
-Put a normalized OpenCV capture at `photo.png`, edit the hardcoded schema in `tools/schema-preview/schema.ts`, and run:
+Put a clean shared scan at `tools/schema-preview/input.jpg`, edit the fixed TypeScript export in `tools/schema-preview/schema.ts`, and run:
 
 ```bash
 pnpm schema:preview
 ```
 
-This creates `output.png` with bright overlays for the QR region, marker anchors, bubble outlines, centres, labels, point coordinates, and correct answers. You can also pass custom paths:
+This creates `tools/schema-preview/output.png` with bright, question-colored overlays for the QR region, bubble circles, centers, labels, source pixel coordinates, radii, and correct answers. Crop anchors are intentionally absent because `input.jpg` is already the marker-free crop.
 
 ```bash
-pnpm schema:preview -- path/to/photo.png path/to/output.png
+pnpm schema:preview --watch
 ```
 
-`captureAnchorsPt` must contain the PDF positions of the four points represented by the OpenCV image corners in visual TL, TR, BR, BL order. This mapping is what makes whole-page PDF coordinates line up with a crop taken inside the black markers.
+Watch mode stays running and refreshes whenever `input.jpg` or `schema.ts` changes. Invalid schemas print every discovered problem with its schema path and remove stale `output.png`. Until the canonical crop contract is finalized, `canonicalImage.dimensions.status` remains explicitly `unresolved` and the preview uses the actual JPEG dimensions. Once fixed, an input mismatch is rejected instead of resized.
 
 On devices with a torch, the glass flash control can illuminate the document while scanning. The torch is turned off while the camera is paused for the captured-content modal.
 
@@ -44,6 +44,7 @@ Or use `pnpm android`. After the native app exists, `pnpm start` is enough for J
 ```bash
 npx tsc --noEmit
 pnpm lint
+pnpm schema:test
 ```
 
 Static checks do not validate the native JSI/worklet boundary. Before production, test on representative iOS and Android hardware with varied page sizes, backgrounds, lighting, shadows, glare, and camera orientations. Marker thresholds live in `src/features/document-scanner/document-detection.ts`; stability and sharpness thresholds live near the top of `src/features/document-scanner/document-camera.tsx`.

@@ -38,6 +38,10 @@ yarn-error.*
 
 example
 
+# Local schema workbench artifacts (shared scans may contain student data)
+/tools/schema-preview/input.jpg
+/tools/schema-preview/output.png
+
 # generated native folders
 /ios
 /android

@@ -43,7 +43,8 @@
     "android": "expo run:android",
     "ios": "expo run:ios --device",
     "lint": "expo lint",
-    "schema:preview": "tsx tools/schema-preview/generate-overlay.ts"
+    "schema:preview": "tsx tools/schema-preview/generate-overlay.ts",
+    "schema:test": "tsx --test tools/schema-preview/schema-preview.test.ts"
   },
   "private": true
 }
