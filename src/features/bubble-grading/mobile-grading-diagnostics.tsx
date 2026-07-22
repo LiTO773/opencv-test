@@ -1,7 +1,8 @@
-import { useMemo, useState, type ReactNode } from 'react';
+import { useState, type ReactNode } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 
 import type { MobileGradingOutcome } from './mobile-bubble-grading';
+import type { CapturePipelineTimings } from '../four-point/types';
 import {
   buildMobileGradingDiagnosticRecord,
   type DiagnosticReason,
@@ -57,7 +58,7 @@ function Disclosure({
   label,
   level = 'primary',
 }: {
-  children: ReactNode;
+  children: ReactNode | (() => ReactNode);
   label: string;
   level?: 'primary' | 'secondary' | 'record';
 }) {
@@ -93,7 +94,11 @@ function Disclosure({
           {expanded ? '−' : '+'}
         </Text>
       </Pressable>
-      {expanded ? <View style={styles.disclosureContent}>{children}</View> : null}
+      {expanded ? (
+        <View style={styles.disclosureContent}>
+          {typeof children === 'function' ? children() : children}
+        </View>
+      ) : null}
     </View>
   );
 }
@@ -102,23 +107,23 @@ export function MobileGradingDiagnostics({
   imageHeight,
   imageWidth,
   outcome,
+  pipelineTimings,
 }: {
   imageHeight: number;
   imageWidth: number;
   outcome: MobileGradingOutcome;
+  pipelineTimings?: CapturePipelineTimings;
 }) {
-  const record = useMemo(
-    () =>
-      buildMobileGradingDiagnosticRecord(outcome, {
-        width: imageWidth,
-        height: imageHeight,
-      }),
-    [imageHeight, imageWidth, outcome],
-  );
-
   return (
     <View style={styles.container}>
       <Disclosure label="Diagnósticos técnicos">
+        {() => {
+          const record = buildMobileGradingDiagnosticRecord(outcome, {
+        width: imageWidth,
+        height: imageHeight,
+          });
+          return (
+            <>
         <Text selectable style={styles.prototypeWarning}>
           Limites provisórios para calibração física; este registo não representa precisão de produção.
         </Text>
@@ -177,6 +182,26 @@ export function MobileGradingDiagnostics({
           <Text selectable style={styles.subsectionTitle}>Motivos globais</Text>
           <ReasonRows emptyLabel="Nenhum motivo global registado." reasons={record.scan.reviewReasons} />
         </View>
+
+        {pipelineTimings ? (
+          <View style={styles.section}>
+            <Text selectable style={styles.sectionTitle}>Pipeline de captura</Text>
+            <DiagnosticRow label="captura" value={`${pipelineTimings.capturePhotoMs} ms`} />
+            <DiagnosticRow label="descodificação" value={`${pipelineTimings.decodePhotoMs} ms`} />
+            <DiagnosticRow label="deteção final" value={`${pipelineTimings.finalDetectionMs} ms`} />
+            <DiagnosticRow
+              label="perspetiva e leitura"
+              value={`${pipelineTimings.perspectiveCorrectionMs} ms`}
+            />
+            <DiagnosticRow label="QR" value={`${pipelineTimings.qrDecodeMs} ms`} />
+            <DiagnosticRow label="classificação" value={`${pipelineTimings.gradingMs} ms`} />
+            <DiagnosticRow
+              label="pré-visualização durante pipeline"
+              value={`${pipelineTimings.previewFramesDuringPipeline} frames · ${pipelineTimings.previewFpsDuringPipeline} FPS`}
+            />
+            <DiagnosticRow label="total" value={`${pipelineTimings.totalMs} ms`} />
+          </View>
+        ) : null}
 
         {record.failure ? (
           <View style={styles.failureSection}>
@@ -287,6 +312,9 @@ export function MobileGradingDiagnostics({
             </View>
           </Disclosure>
         ) : null}
+            </>
+          );
+        }}
       </Disclosure>
     </View>
   );

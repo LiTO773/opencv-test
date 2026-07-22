@@ -36,7 +36,19 @@ export type FourPointAnalysis = {
   matchedCount: number;
 };
 
-export type FourPointScanState = 'searching' | 'ready' | 'capturing';
+export type FourPointScanState = 'searching' | 'ready' | 'capturing' | 'processing';
+
+export type CapturePipelineTimings = {
+  capturePhotoMs: number;
+  decodePhotoMs: number;
+  finalDetectionMs: number;
+  perspectiveCorrectionMs: number;
+  qrDecodeMs: number;
+  gradingMs: number;
+  previewFramesDuringPipeline: number;
+  previewFpsDuringPipeline: number;
+  totalMs: number;
+};
 
 export type JsonValue =
   | boolean
@@ -62,10 +74,10 @@ export type QrMetadata = {
 };
 
 export type FourPointScan = {
-  imageUri: string;
   width: number;
   height: number;
   qr: QrMetadata | null;
   studentId: string | null;
   grading: MobileGradingOutcome;
+  pipelineTimings: CapturePipelineTimings;
 };

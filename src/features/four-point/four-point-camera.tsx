@@ -3,7 +3,6 @@ import {
   AlphaType,
   ColorType,
   FilterMode,
-  ImageFormat,
   MipmapMode,
   PaintStyle,
   Skia,
@@ -14,7 +13,7 @@ import {
   type SkImage,
 } from '@shopify/react-native-skia';
 import { useCallback, useEffect, useMemo, useRef } from 'react';
-import { StyleSheet, useWindowDimensions } from 'react-native';
+import { Platform, StyleSheet, useWindowDimensions } from 'react-native';
 import { useSharedValue } from 'react-native-reanimated';
 import {
   CommonResolutions,
@@ -25,13 +24,12 @@ import {
 } from 'react-native-vision-camera';
 import { useResizer } from 'react-native-vision-camera-resizer';
 import { SkiaCamera, type SkiaCameraRef } from 'react-native-vision-camera-skia';
-import { scheduleOnRN } from 'react-native-worklets';
+import { scheduleOnRN, type WorkletRuntime } from 'react-native-worklets';
 
 import { CANONICAL_CROP_CONTRACT } from '@/features/bubble-grading/canonical-crop-contract';
+import { hardcodedBubbleGradingSchema } from '@/features/bubble-grading/hardcoded-schema';
 import {
-  analyzeMobileBubbleGradingImage,
-  createMobileGradingFailure,
-  rgbaPixelsToGrayscaleImage,
+  analyzeMobileBubbleGradingImageOnRuntime,
 } from '@/features/bubble-grading/mobile-bubble-grading';
 import {
   createMarkerRegions,
@@ -39,7 +37,11 @@ import {
   detectFourPointsFromRgba,
   mapAnalysisToSource,
 } from '@/features/four-point/four-point-detection';
-import { readQrMetadata, readQrPayloadId } from '@/features/four-point/qr-reader';
+import {
+  readQrMetadataInRegions,
+  readQrPayloadId,
+  type QrPixelRegion,
+} from '@/features/four-point/qr-reader';
 import type {
   FourPointAnalysis,
   FourPointScan,
@@ -79,6 +81,7 @@ markerPaint.setColor(Skia.Color('#22C55E'));
 
 type FourPointCameraProps = {
   device: NonNullable<ReturnType<typeof import('react-native-vision-camera').useCameraDevice>>;
+  gradingRuntime: WorkletRuntime;
   isActive: boolean;
   onCropCaptured: (scan: FourPointScan) => void;
   onMarkerCountChange: (count: number) => void;
@@ -136,72 +139,75 @@ function solveHomography(
   ];
 }
 
-function readQrFromImage(image: SkImage, width: number, height: number) {
+function nowMilliseconds() {
+  return globalThis.performance?.now() ?? Date.now();
+}
+
+function roundedMilliseconds(value: number) {
+  return Number(value.toFixed(3));
+}
+
+function readCanonicalPixels(image: SkImage, width: number, height: number) {
   const pixels = image.readPixels(0, 0, {
     alphaType: AlphaType.Unpremul,
     colorType: ColorType.RGBA_8888,
     width,
     height,
   });
-  if (!pixels || pixels instanceof Float32Array) return null;
-  return readQrMetadata(
-    new Uint8ClampedArray(pixels.buffer, pixels.byteOffset, pixels.byteLength),
-    width,
-    height,
-  );
+  if (!pixels || pixels instanceof Float32Array) {
+    throw new Error('Não foi possível ler os píxeis da imagem canónica para classificação.');
+  }
+  const copy = new Uint8Array(pixels.byteLength);
+  copy.set(pixels);
+  return copy;
 }
 
-function gradeCanonicalImage(
-  image: SkImage,
-  width: number,
-  height: number,
-  qr: QrMetadata | null,
-) {
-  try {
-    const pixels = image.readPixels(0, 0, {
-      alphaType: AlphaType.Unpremul,
-      colorType: ColorType.RGBA_8888,
-      width,
-      height,
-    });
-    if (!pixels || pixels instanceof Float32Array) {
-      throw new Error('Não foi possível ler os píxeis da imagem canónica para classificação.');
+function rotateRgba180InPlace(pixels: Uint8Array) {
+  for (let left = 0, right = pixels.length - 4; left < right; left += 4, right -= 4) {
+    for (let channel = 0; channel < 4; channel += 1) {
+      const temporary = pixels[left + channel];
+      pixels[left + channel] = pixels[right + channel];
+      pixels[right + channel] = temporary;
     }
-    const rgba = new Uint8Array(pixels.buffer, pixels.byteOffset, pixels.byteLength);
-    return analyzeMobileBubbleGradingImage(
-      rgbaPixelsToGrayscaleImage(rgba, width, height),
-      qr,
-    );
-  } catch (caught) {
-    return createMobileGradingFailure(
-      qr,
-      caught instanceof Error ? caught.message : String(caught),
-    );
   }
 }
 
-function rotatePage180(image: SkImage, width: number, height: number) {
-  const surface = Skia.Surface.Make(width, height);
-  if (!surface) return null;
-  try {
-    const canvas = surface.getCanvas();
-    canvas.clear(Skia.Color('#FFFFFF'));
-    canvas.rotate(180, width / 2, height / 2);
-    canvas.drawImage(image, 0, 0);
-    surface.flush();
-    return { image: surface.makeImageSnapshot(), surface };
-  } catch (caught) {
-    surface.dispose();
-    throw caught;
-  }
+function expandedQrRegion(region: QrPixelRegion, padding: number): QrPixelRegion {
+  return {
+    x: region.x - padding,
+    y: region.y - padding,
+    width: region.width + padding * 2,
+    height: region.height + padding * 2,
+  };
 }
+
+function qrSearchRegions(width: number, height: number): QrPixelRegion[] {
+  const declared = hardcodedBubbleGradingSchema.qrRegionPx;
+  const opposite = {
+    x: width - declared.x - declared.width,
+    y: height - declared.y - declared.height,
+    width: declared.width,
+    height: declared.height,
+  };
+  return [expandedQrRegion(declared, 12), expandedQrRegion(opposite, 12)];
+}
+
+type CanonicalScanPixels = {
+  width: number;
+  height: number;
+  rgba: Uint8Array;
+  qr: QrMetadata | null;
+  perspectiveCorrectionMs: number;
+  qrDecodeMs: number;
+};
 
 function normalizeSnapshot(
   snapshot: SkImage,
   analysisQuadrilateral: Quadrilateral,
   analysisWidth: number,
   analysisHeight: number,
-): FourPointScan | null {
+): CanonicalScanPixels | null {
+  const normalizationStartedAt = nowMilliseconds();
   const source = analysisQuadrilateral.map((point) =>
     mapAnalysisToSource(
       point,
@@ -236,36 +242,35 @@ function normalizeSnapshot(
     const normalizedSnapshot = surface.makeImageSnapshot();
     const rasterImage = normalizedSnapshot.makeNonTextureImage();
     const normalizedImage = rasterImage ?? normalizedSnapshot;
-    let rotatedPage: ReturnType<typeof rotatePage180> = null;
     try {
-      const detectedQr = readQrFromImage(normalizedImage, outputWidth, outputHeight);
-      let qr: QrMetadata | null = detectedQr;
-      let finalImage = normalizedImage;
+      const rgba = readCanonicalPixels(normalizedImage, outputWidth, outputHeight);
+      const qrStartedAt = nowMilliseconds();
+      const detectedQr = readQrMetadataInRegions(
+        new Uint8ClampedArray(rgba.buffer, rgba.byteOffset, rgba.byteLength),
+        outputWidth,
+        outputHeight,
+        qrSearchRegions(outputWidth, outputHeight),
+      );
+      const qrDecodeMs = roundedMilliseconds(nowMilliseconds() - qrStartedAt);
+      let qr = detectedQr;
       if (detectedQr?.orientation === 'upside-down') {
-        rotatedPage = rotatePage180(normalizedImage, outputWidth, outputHeight);
-        if (rotatedPage) {
-          finalImage = rotatedPage.image;
-          qr = {
-            ...detectedQr,
-            orientation: 'upright',
-            rotationApplied: 180,
-          };
-        }
+        rotateRgba180InPlace(rgba);
+        qr = {
+          ...detectedQr,
+          orientation: 'upright',
+          rotationApplied: 180,
+        };
       }
 
-      const finalWidth = finalImage.width();
-      const finalHeight = finalImage.height();
       return {
-        imageUri: `data:image/jpeg;base64,${finalImage.encodeToBase64(ImageFormat.JPEG, 92)}`,
-        width: finalWidth,
-        height: finalHeight,
+        width: outputWidth,
+        height: outputHeight,
+        rgba,
         qr,
-        studentId: qr ? readQrPayloadId(qr, 'studentId') : null,
-        grading: gradeCanonicalImage(finalImage, finalWidth, finalHeight, qr),
+        perspectiveCorrectionMs: roundedMilliseconds(qrStartedAt - normalizationStartedAt),
+        qrDecodeMs,
       };
     } finally {
-      rotatedPage?.image.dispose();
-      rotatedPage?.surface.dispose();
       if (rasterImage && rasterImage !== normalizedSnapshot) rasterImage.dispose();
       normalizedSnapshot.dispose();
     }
@@ -328,9 +333,65 @@ function makeStillAnalysisBuffer(
 async function makeSkiaImageFromPhoto(photo: Photo) {
   const orientedImage = await photo.toImageAsync();
   try {
-    const encodedImage = await orientedImage.toEncodedImageDataAsync('jpg', 95);
-    const data = Skia.Data.fromBytes(new Uint8Array(encodedImage.buffer));
-    const image = Skia.Image.MakeImageFromEncoded(data);
+    const raw = await orientedImage.toRawPixelDataAsync();
+    let data = Skia.Data.fromBytes(new Uint8Array(raw.buffer));
+    const colorType =
+      raw.pixelFormat === 'BGRA'
+        ? ColorType.BGRA_8888
+        : raw.pixelFormat === 'RGBA'
+          ? ColorType.RGBA_8888
+          : null;
+    let image = colorType
+      ? Skia.Image.MakeImage(
+          {
+            alphaType: AlphaType.Opaque,
+            colorType,
+            width: raw.width,
+            height: raw.height,
+          },
+          data,
+          raw.width * 4,
+        )
+      : null;
+    if (image) {
+      const sourceImage = image;
+      const swapsDimensions = photo.orientation === 'right' || photo.orientation === 'left';
+      const outputWidth = swapsDimensions ? sourceImage.height() : sourceImage.width();
+      const outputHeight = swapsDimensions ? sourceImage.width() : sourceImage.height();
+      if (Platform.OS === 'ios' && (photo.orientation !== 'up' || photo.isMirrored)) {
+        const surface = Skia.Surface.Make(outputWidth, outputHeight);
+        if (!surface) {
+          sourceImage.dispose();
+          data.dispose();
+          throw new Error('Não foi possível orientar a fotografia final.');
+        }
+        const canvas = surface.getCanvas();
+        canvas.clear(Skia.Color('#FFFFFF'));
+        if (photo.isMirrored) {
+          canvas.translate(outputWidth, 0);
+          canvas.scale(-1, 1);
+        }
+        if (photo.orientation === 'right') {
+          canvas.translate(sourceImage.height(), 0);
+          canvas.rotate(90, 0, 0);
+        } else if (photo.orientation === 'down') {
+          canvas.translate(sourceImage.width(), sourceImage.height());
+          canvas.rotate(180, 0, 0);
+        } else if (photo.orientation === 'left') {
+          canvas.translate(0, sourceImage.width());
+          canvas.rotate(-90, 0, 0);
+        }
+        canvas.drawImage(sourceImage, 0, 0);
+        surface.flush();
+        image = surface.makeImageSnapshot();
+        return { data, image, sourceImage, surface };
+      }
+    } else {
+      data.dispose();
+      const encodedImage = await orientedImage.toEncodedImageDataAsync('jpg', 90);
+      data = Skia.Data.fromBytes(new Uint8Array(encodedImage.buffer));
+      image = Skia.Image.MakeImageFromEncoded(data);
+    }
     if (!image) {
       data.dispose();
       throw new Error('Não foi possível descodificar a fotografia final.');
@@ -347,6 +408,7 @@ function analyzeAndNormalizeCapturedImage(
   analysisHeight: number,
   regions: readonly MarkerRegion[],
 ) {
+  const detectionStartedAt = nowMilliseconds();
   const analysisBuffer = makeStillAnalysisBuffer(image, analysisWidth, analysisHeight);
   if (!analysisBuffer) {
     throw new Error('Não foi possível preparar a fotografia final para análise.');
@@ -357,6 +419,7 @@ function analyzeAndNormalizeCapturedImage(
     analysisHeight,
     regions,
   );
+  const finalDetectionMs = roundedMilliseconds(nowMilliseconds() - detectionStartedAt);
   if (!analysis.cropQuadrilateral) {
     if (analysis.matchedCount < 4) {
       throw new Error(
@@ -374,7 +437,7 @@ function analyzeAndNormalizeCapturedImage(
     analysisHeight,
   );
   if (!scan) throw new Error('Não foi possível corrigir a perspetiva da fotografia.');
-  return scan;
+  return { ...scan, finalDetectionMs };
 }
 
 function drawQuadrilateral(
@@ -459,6 +522,7 @@ const emptyAnalysis: FourPointAnalysis = {
 
 export function FourPointCamera({
   device,
+  gradingRuntime,
   isActive,
   onCropCaptured,
   onMarkerCountChange,
@@ -479,8 +543,8 @@ export function FourPointCamera({
   const cameraRef = useRef<SkiaCameraRef>(null);
   const photoOutput = usePhotoOutput({
     containerFormat: 'jpeg',
-    quality: 0.95,
-    qualityPrioritization: 'quality',
+    quality: 0.9,
+    qualityPrioritization: device.supportsSpeedQualityPrioritization ? 'speed' : 'balanced',
     targetResolution: CommonResolutions.QHD_4_3,
   });
   const cameraOutputs = useMemo(() => [photoOutput], [photoOutput]);
@@ -493,6 +557,8 @@ export function FourPointCamera({
     pixelLayout: 'interleaved',
   });
   const frameCounter = useSharedValue(0);
+  const renderedFrameCount = useSharedValue(0);
+  const captureStartedFrameCount = useSharedValue(0);
   const consecutiveMatches = useSharedValue(0);
   const lastAnalysis = useSharedValue<FourPointAnalysis>(emptyAnalysis);
   const lastReportedMarkerCount = useSharedValue(0);
@@ -519,19 +585,61 @@ export function FourPointCamera({
   const captureFinalPhoto = useCallback(async () => {
     let photo: Photo | null = null;
     let decodedPhoto: Awaited<ReturnType<typeof makeSkiaImageFromPhoto>> | null = null;
+    const pipelineStartedAt = nowMilliseconds();
     try {
+      const captureStartedAt = nowMilliseconds();
       photo = await photoOutput.capturePhoto(
         { enableShutterSound: false, flashMode: 'off' },
         {},
       );
+      const capturePhotoMs = roundedMilliseconds(nowMilliseconds() - captureStartedAt);
+      lastReportedScanState.value = 'processing';
+      onScanStateChange('processing');
+
+      const decodeStartedAt = nowMilliseconds();
       decodedPhoto = await makeSkiaImageFromPhoto(photo);
-      const scan = analyzeAndNormalizeCapturedImage(
+      const decodePhotoMs = roundedMilliseconds(nowMilliseconds() - decodeStartedAt);
+      const canonical = analyzeAndNormalizeCapturedImage(
         decodedPhoto.image,
         ANALYSIS_WIDTH,
         analysisHeight,
         regions,
       );
-      onCropCaptured(scan);
+      const gradingStartedAt = nowMilliseconds();
+      const grading = await analyzeMobileBubbleGradingImageOnRuntime(
+        gradingRuntime,
+        canonical.rgba,
+        canonical.width,
+        canonical.height,
+        canonical.qr,
+      );
+      const gradingMs = roundedMilliseconds(nowMilliseconds() - gradingStartedAt);
+      const totalMs = roundedMilliseconds(nowMilliseconds() - pipelineStartedAt);
+      const previewFramesDuringPipeline = Math.max(
+        0,
+        renderedFrameCount.value - captureStartedFrameCount.value,
+      );
+      onCropCaptured({
+        width: canonical.width,
+        height: canonical.height,
+        qr: canonical.qr,
+        studentId: canonical.qr ? readQrPayloadId(canonical.qr, 'studentId') : null,
+        grading,
+        pipelineTimings: {
+          capturePhotoMs,
+          decodePhotoMs,
+          finalDetectionMs: canonical.finalDetectionMs,
+          perspectiveCorrectionMs: canonical.perspectiveCorrectionMs,
+          qrDecodeMs: canonical.qrDecodeMs,
+          gradingMs,
+          previewFramesDuringPipeline,
+          previewFpsDuringPipeline:
+            totalMs === 0
+              ? 0
+              : roundedMilliseconds((previewFramesDuringPipeline * 1000) / totalMs),
+          totalMs,
+        },
+      });
     } catch (caught) {
       didCapture.value = false;
       consecutiveMatches.value = 0;
@@ -543,13 +651,17 @@ export function FourPointCamera({
       onProcessorError(caught instanceof Error ? caught.message : String(caught));
     } finally {
       decodedPhoto?.image.dispose();
+      decodedPhoto?.sourceImage?.dispose();
+      decodedPhoto?.surface?.dispose();
       decodedPhoto?.data.dispose();
       photo?.dispose();
     }
   }, [
     analysisHeight,
+    captureStartedFrameCount,
     consecutiveMatches,
     didCapture,
+    gradingRuntime,
     lastAnalysis,
     lastReportedMarkerCount,
     lastReportedScanState,
@@ -558,6 +670,7 @@ export function FourPointCamera({
     onProcessorError,
     onScanStateChange,
     photoOutput,
+    renderedFrameCount,
     regions,
   ]);
 
@@ -579,6 +692,7 @@ export function FourPointCamera({
       : never) => {
       'worklet';
       try {
+        renderedFrameCount.value += 1;
         frameCounter.value = (frameCounter.value + 1) % DETECTION_INTERVAL_FRAMES;
         if (!didCapture.value && frameCounter.value === 0 && resizerState.resizer) {
           const resizedFrame = resizerState.resizer.resize(frame);
@@ -636,6 +750,7 @@ export function FourPointCamera({
 
         if (shouldCapture) {
           didCapture.value = true;
+          captureStartedFrameCount.value = renderedFrameCount.value;
           lastReportedScanState.value = 'capturing';
           scheduleOnRN(reportScanState, 'capturing');
           scheduleOnRN(captureFinalPhoto);
@@ -667,6 +782,7 @@ export function FourPointCamera({
     },
     [
       analysisHeight,
+      captureStartedFrameCount,
       captureFinalPhoto,
       consecutiveMatches,
       didCapture,
@@ -677,6 +793,7 @@ export function FourPointCamera({
       lastReportedScanState,
       onProcessorError,
       regions,
+      renderedFrameCount,
       reportMarkerCount,
       reportScanState,
       resizerState.resizer,

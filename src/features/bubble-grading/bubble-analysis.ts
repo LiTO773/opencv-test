@@ -145,18 +145,22 @@ export class BubbleAnalysisValidationFailure extends Error {
 }
 
 function rounded(value: number, digits = 6) {
+  'worklet';
   return Number(value.toFixed(digits));
 }
 
 function nowMilliseconds() {
+  'worklet';
   return globalThis.performance?.now() ?? Date.now();
 }
 
 function pixel(image: GrayscaleImage, x: number, y: number) {
+  'worklet';
   return image.data[y * image.width + x];
 }
 
 function circleBounds(center: PixelPoint, radius: number) {
+  'worklet';
   return {
     left: Math.floor(center.x - radius),
     top: Math.floor(center.y - radius),
@@ -166,18 +170,23 @@ function circleBounds(center: PixelPoint, radius: number) {
 }
 
 function mean(values: number[]) {
+  'worklet';
   if (values.length === 0) return 0;
   return values.reduce((sum, value) => sum + value, 0) / values.length;
 }
 
-function collectDisk(
+function sampleDisk(
   image: GrayscaleImage,
   center: PixelPoint,
   radius: number,
+  darkCutoff: number,
 ) {
-  const values: number[] = [];
+  'worklet';
   const bounds = circleBounds(center, radius);
   let incomplete = false;
+  let count = 0;
+  let darkCount = 0;
+  let sum = 0;
   for (let y = bounds.top; y < bounds.bottom; y += 1) {
     for (let x = bounds.left; x < bounds.right; x += 1) {
       const distance = Math.hypot(x - center.x, y - center.y);
@@ -185,22 +194,27 @@ function collectDisk(
       if (x < 0 || y < 0 || x >= image.width || y >= image.height) {
         incomplete = true;
       } else {
-        values.push(pixel(image, x, y));
+        const value = pixel(image, x, y);
+        count += 1;
+        sum += value;
+        if (value <= darkCutoff) darkCount += 1;
       }
     }
   }
-  return { values, incomplete };
+  return { count, darkCount, sum, incomplete };
 }
 
-function collectRing(
+function sampleRing(
   image: GrayscaleImage,
   center: PixelPoint,
   innerRadius: number,
   outerRadius: number,
 ) {
-  const values: number[] = [];
+  'worklet';
   const bounds = circleBounds(center, outerRadius);
   let incomplete = false;
+  let count = 0;
+  let sum = 0;
   for (let y = bounds.top; y < bounds.bottom; y += 1) {
     for (let x = bounds.left; x < bounds.right; x += 1) {
       const distance = Math.hypot(x - center.x, y - center.y);
@@ -208,11 +222,12 @@ function collectRing(
       if (x < 0 || y < 0 || x >= image.width || y >= image.height) {
         incomplete = true;
       } else {
-        values.push(pixel(image, x, y));
+        count += 1;
+        sum += pixel(image, x, y);
       }
     }
   }
-  return { values, incomplete };
+  return { count, sum, incomplete };
 }
 
 function outlineDarkness(
@@ -220,14 +235,15 @@ function outlineDarkness(
   center: PixelPoint,
   style: BubbleStyle,
 ) {
+  'worklet';
   const halfWidth = Math.max(0.75, style.printedOutlineWidthPx / 2);
-  const ring = collectRing(
+  const ring = sampleRing(
     image,
     center,
     Math.max(0, style.radiusPx - halfWidth),
     style.radiusPx + halfWidth,
   );
-  return ring.values.length === 0 ? 0 : 1 - mean(ring.values) / 255;
+  return ring.count === 0 ? 0 : 1 - ring.sum / ring.count / 255;
 }
 
 function findMeasuredCenter(
@@ -235,6 +251,7 @@ function findMeasuredCenter(
   expectedCenter: PixelPoint,
   style: BubbleStyle,
 ) {
+  'worklet';
   const tolerance = style.centerSearchTolerancePx;
   let best = {
     center: expectedCenter,
@@ -262,8 +279,11 @@ function findMeasuredCenter(
 }
 
 function measureFocus(image: GrayscaleImage, center: PixelPoint, roiRadius: number) {
+  'worklet';
   const bounds = circleBounds(center, roiRadius);
-  const values: number[] = [];
+  let count = 0;
+  let sum = 0;
+  let sumOfSquares = 0;
   for (let y = bounds.top + 1; y < bounds.bottom - 1; y += 1) {
     for (let x = bounds.left + 1; x < bounds.right - 1; x += 1) {
       if (
@@ -281,12 +301,14 @@ function measureFocus(image: GrayscaleImage, center: PixelPoint, roiRadius: numb
         pixel(image, x, y - 1) +
         pixel(image, x, y + 1) -
         4 * pixel(image, x, y);
-      values.push(laplacian);
+      count += 1;
+      sum += laplacian;
+      sumOfSquares += laplacian ** 2;
     }
   }
-  const average = mean(values);
-  const variance = mean(values.map((value) => (value - average) ** 2));
-  return { score: variance / 255 ** 2, sampledPixelCount: values.length };
+  const average = count === 0 ? 0 : sum / count;
+  const variance = count === 0 ? 0 : Math.max(0, sumOfSquares / count - average ** 2);
+  return { score: variance / 255 ** 2, sampledPixelCount: count };
 }
 
 function confidenceFor(
@@ -294,6 +316,7 @@ function confidenceFor(
   darkPixelRatio: number,
   config: BubbleDetectorConfig,
 ) {
+  'worklet';
   if (decision === 'unfilled') {
     return rounded(Math.max(0, 1 - darkPixelRatio / config.unfilledMaxDarkPixelRatio));
   }
@@ -323,30 +346,33 @@ function analyzeBubble(
   config: BubbleDetectorConfig,
   recordTiming: boolean,
 ): BubbleDiagnostic {
+  'worklet';
   const startedAt = recordTiming ? nowMilliseconds() : null;
   const style = schema.bubbleStyle;
   const centerMatch = findMeasuredCenter(image, expectedCenter, style);
-  const interior = collectDisk(image, centerMatch.center, style.fillRadiusPx);
-  const background = collectRing(
+  const background = sampleRing(
     image,
     centerMatch.center,
     style.backgroundRingInnerRadiusPx,
     style.backgroundRingOuterRadiusPx,
   );
   const focus = measureFocus(image, expectedCenter, style.roiRadiusPx);
-  const interiorMean = mean(interior.values);
-  const backgroundMean = mean(background.values);
+  const backgroundMean = background.count === 0 ? 0 : background.sum / background.count;
+  const darkCutoff = backgroundMean - config.darkPixelDelta * 255;
+  const interior = sampleDisk(
+    image,
+    centerMatch.center,
+    style.fillRadiusPx,
+    darkCutoff,
+  );
+  const interiorMean = interior.count === 0 ? 0 : interior.sum / interior.count;
   const backgroundBrightness = backgroundMean / 255;
   const interiorBrightness = interiorMean / 255;
-  const darkCutoff = backgroundMean - config.darkPixelDelta * 255;
-  const darkPixelRatio =
-    interior.values.length === 0
-      ? 0
-      : interior.values.filter((value) => value <= darkCutoff).length / interior.values.length;
+  const darkPixelRatio = interior.count === 0 ? 0 : interior.darkCount / interior.count;
   const contrast = (backgroundMean - interiorMean) / 255;
   const reasonCodes: BubbleReasonCode[] = [];
   if (centerMatch.distance > 0) reasonCodes.push('center_adjusted');
-  if (interior.incomplete || background.incomplete || interior.values.length === 0 || background.values.length === 0) {
+  if (interior.incomplete || background.incomplete || interior.count === 0 || background.count === 0) {
     reasonCodes.push('measurement_region_incomplete');
   }
   if (
@@ -418,16 +444,18 @@ function analyzeBubble(
     timing: {
       durationMs: startedAt === null ? null : rounded(nowMilliseconds() - startedAt, 3),
       sampledPixelCount:
-        interior.values.length + background.values.length + focus.sampledPixelCount,
+        interior.count + background.count + focus.sampledPixelCount,
     },
   };
 }
 
 function exactSetMatch(actual: Set<string>, expected: Set<string>) {
+  'worklet';
   return actual.size === expected.size && [...actual].every((id) => expected.has(id));
 }
 
 function minimumConfidence(diagnostics: BubbleDiagnostic[]) {
+  'worklet';
   return rounded(
     diagnostics.length === 0
       ? 1
@@ -444,6 +472,7 @@ export function gradeBubbleDiagnostics(
   schema: BubbleGradingSchema,
   bubbles: BubbleDiagnostic[],
 ): { questions: QuestionGradingResult[]; score: GradingScore } {
+  'worklet';
   const diagnosticsByQuestion = new Map<string, Map<string, BubbleDiagnostic>>();
   for (const diagnostic of bubbles) {
     const questionDiagnostics = diagnosticsByQuestion.get(diagnostic.questionId) ?? new Map();
@@ -576,7 +605,6 @@ export function analyzeBubbleGradingImage(
   config: BubbleDetectorConfig = PROVISIONAL_BUBBLE_DETECTOR_CONFIG,
   options: BubbleAnalysisOptions = {},
 ): BubbleAnalysisResult {
-  const startedAt = options.recordTiming ? nowMilliseconds() : null;
   const validation = validateBubbleGradingSchema(candidate, {
     inputImage: { width: image.width, height: image.height },
   });
@@ -596,11 +624,32 @@ export function analyzeBubbleGradingImage(
     );
   }
 
-  const bubbles = validation.schema.questions.flatMap((question) =>
+  return analyzeValidatedBubbleGradingImage(validation.schema, image, config, options);
+}
+
+/**
+ * Worker-safe analyzer for callers that already validated the schema and image
+ * contract on the React Native runtime.
+ */
+export function analyzeValidatedBubbleGradingImage(
+  schema: BubbleGradingSchema,
+  image: GrayscaleImage,
+  config: BubbleDetectorConfig = PROVISIONAL_BUBBLE_DETECTOR_CONFIG,
+  options: BubbleAnalysisOptions = {},
+): BubbleAnalysisResult {
+  'worklet';
+  const startedAt = options.recordTiming ? nowMilliseconds() : null;
+  if (image.data.length !== image.width * image.height) {
+    throw new Error(
+      `Expected ${image.width * image.height} grayscale pixels but received ${image.data.length}.`,
+    );
+  }
+
+  const bubbles = schema.questions.flatMap((question) =>
     question.bubbles.map((bubble) =>
       analyzeBubble(
         image,
-        validation.schema,
+        schema,
         question.id,
         bubble.id,
         bubble.centerPx,
@@ -622,7 +671,7 @@ export function analyzeBubbleGradingImage(
     bubble.reasonCodes.forEach((reason) => reasonCodes.add(reason));
   }
 
-  const grading = gradeBubbleDiagnostics(validation.schema, bubbles);
+  const grading = gradeBubbleDiagnostics(schema, bubbles);
   return {
     diagnosticFormatVersion: BUBBLE_DIAGNOSTIC_FORMAT_VERSION,
     detector: { id: config.id, provisional: true },

@@ -36,6 +36,7 @@ import {
 } from '../../src/features/bubble-grading/mobile-question-review';
 import type { BubbleGradingSchema, QuestionSchema } from '../../src/features/bubble-grading/schema';
 import { validateBubbleGradingSchema } from '../../src/features/bubble-grading/schema-validator';
+import { readQrMetadataInRegions } from '../../src/features/four-point/qr-reader';
 import type { QrMetadata } from '../../src/features/four-point/types';
 import { mobileGradingResultFixture } from './fixtures/mobile-grading-result';
 import { multipleErrorsSchemaFixture } from './fixtures/multiple-errors-schema';
@@ -53,6 +54,45 @@ function oneBubbleSchema() {
   ];
   return schema;
 }
+
+test('decodes the canonical QR from only its declared upright and rotated regions', async () => {
+  const width = CANONICAL_CROP_CONTRACT.widthPx;
+  const height = CANONICAL_CROP_CONTRACT.heightPx;
+  const inputPath = join(process.cwd(), 'tools/schema-preview/input.png');
+  const declared = hardcodedBubbleGradingSchema.qrRegionPx;
+  const opposite = {
+    x: width - declared.x - declared.width,
+    y: height - declared.y - declared.height,
+    width: declared.width,
+    height: declared.height,
+  };
+  const upright = await sharp(inputPath)
+    .resize(width, height, { fit: 'fill' })
+    .ensureAlpha()
+    .raw()
+    .toBuffer();
+  const uprightQr = readQrMetadataInRegions(
+    new Uint8ClampedArray(upright.buffer, upright.byteOffset, upright.byteLength),
+    width,
+    height,
+    [declared],
+  );
+  assert.ok(uprightQr);
+
+  const rotated = await sharp(inputPath)
+    .resize(width, height, { fit: 'fill' })
+    .rotate(180)
+    .ensureAlpha()
+    .raw()
+    .toBuffer();
+  const rotatedQr = readQrMetadataInRegions(
+    new Uint8ClampedArray(rotated.buffer, rotated.byteOffset, rotated.byteLength),
+    width,
+    height,
+    [opposite],
+  );
+  assert.equal(rotatedQr?.orientation, 'upside-down');
+});
 
 function syntheticBubbleImage(options: {
   fillRatio?: number;

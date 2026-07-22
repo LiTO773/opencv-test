@@ -1,5 +1,10 @@
 # Bubble Grading Prototype Sprint Specification
 
+> Performance refinement: the mobile result JPEG, image sharing, and annotated
+> mobile image were removed from the capture hot path after the prototype. The
+> app now retains structured grading results only and keeps the live preview
+> active until recognition completes. The offline workbench remains visual.
+
 ## Problem Statement
 
 Teachers need to grade custom bubble-answer sheets generated from the layout of each test. Traditional bubble graders assume a fixed vendor-owned form, but this product owns the PDF generator and can therefore know the exact location, size, question, answer label, and correct state of every bubble before scanning begins.

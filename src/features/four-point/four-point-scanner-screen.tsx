@@ -1,27 +1,25 @@
 import { GlassView } from 'expo-glass-effect';
 import { StatusBar } from 'expo-status-bar';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
   AppState,
-  Image,
   Linking,
   Modal,
   Pressable,
   ScrollView,
   StyleSheet,
   Text,
-  useWindowDimensions,
   View,
 } from 'react-native';
 import { useCameraDevice, useCameraPermission } from 'react-native-vision-camera';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { createWorkletRuntime } from 'react-native-worklets';
 
 import { MobileGradingSummary } from '@/features/bubble-grading/mobile-grading-summary';
 import { MobileGradingDiagnostics } from '@/features/bubble-grading/mobile-grading-diagnostics';
 import { MobileVisualQuestionReview } from '@/features/bubble-grading/mobile-visual-question-review';
 import { FourPointCamera } from '@/features/four-point/four-point-camera';
-import { shareCleanScan } from '@/features/four-point/share-clean-scan';
 import type {
   FourPointScan,
   FourPointScanState,
@@ -74,17 +72,16 @@ function ScannerCamera() {
   const insets = useSafeAreaInsets();
   const device = useCameraDevice('back');
   const isAppActive = useIsAppActive();
-  const { width: windowWidth } = useWindowDimensions();
+  const gradingRuntime = useMemo(
+    () => createWorkletRuntime({ name: 'omr-grading-runtime' }),
+    [],
+  );
   const [scanState, setScanState] = useState<FourPointScanState>('searching');
   const [markerCount, setMarkerCount] = useState(0);
   const [processorError, setProcessorError] = useState<string | null>(null);
   const [capturedScan, setCapturedScan] = useState<FourPointScan | null>(null);
   const [scanSession, setScanSession] = useState(0);
-  const [shareError, setShareError] = useState<string | null>(null);
-  const [isSharing, setIsSharing] = useState(false);
   const [torchEnabled, setTorchEnabled] = useState(false);
-  const cropScrollRef = useRef<ScrollView>(null);
-  const visualReviewOffsetRef = useRef(0);
 
   const handleScanStateChange = useCallback((state: FourPointScanState) => {
     setScanState(state);
@@ -104,30 +101,14 @@ function ScannerCamera() {
   const handleCropCaptured = useCallback((scan: FourPointScan) => {
     setTorchEnabled(false);
     setProcessorError(null);
-    setShareError(null);
     setCapturedScan(scan);
   }, []);
   const handleCloseCrop = useCallback(() => {
     setCapturedScan(null);
-    setShareError(null);
-    setIsSharing(false);
     setMarkerCount(0);
     setScanState('searching');
     setScanSession((session) => session + 1);
   }, []);
-  const handleShareCrop = useCallback(async () => {
-    if (!capturedScan || isSharing) return;
-    setIsSharing(true);
-    setShareError(null);
-    try {
-      await shareCleanScan(capturedScan);
-    } catch (caught) {
-      setShareError(caught instanceof Error ? caught.message : String(caught));
-    } finally {
-      setIsSharing(false);
-    }
-  }, [capturedScan, isSharing]);
-
   if (!device) {
     return (
       <MessageScreen
@@ -138,7 +119,9 @@ function ScannerCamera() {
   }
 
   const statusLabel =
-    scanState === 'capturing'
+    scanState === 'processing'
+      ? 'A reconhecer respostas'
+      : scanState === 'capturing'
       ? 'A capturar fotografia'
       : scanState === 'ready'
         ? '4 marcadores encontrados'
@@ -152,13 +135,22 @@ function ScannerCamera() {
       <FourPointCamera
         key={scanSession}
         device={device}
+        gradingRuntime={gradingRuntime}
         isActive={isAppActive && !capturedScan}
         onCropCaptured={handleCropCaptured}
         onMarkerCountChange={handleMarkerCountChange}
         onProcessorError={handleProcessorError}
         onScanStateChange={handleScanStateChange}
         onTorchError={handleTorchError}
-        torchMode={torchEnabled && isAppActive && !capturedScan ? 'on' : 'off'}
+        torchMode={
+          torchEnabled &&
+          isAppActive &&
+          !capturedScan &&
+          scanState !== 'capturing' &&
+          scanState !== 'processing'
+            ? 'on'
+            : 'off'
+        }
       />
 
       <View
@@ -175,7 +167,7 @@ function ScannerCamera() {
           <View
             style={[
               styles.statusDot,
-              scanState === 'capturing'
+              scanState === 'capturing' || scanState === 'processing'
                 ? styles.statusDotCapturing
                 : scanState === 'ready'
                   ? styles.statusDotReady
@@ -230,8 +222,10 @@ function ScannerCamera() {
       >
         <GlassView colorScheme="dark" glassEffectStyle="regular" style={styles.instructionCard}>
           <Text selectable style={styles.instructionTitle}>
-            {scanState === 'capturing'
-              ? 'A corrigir a perspetiva'
+            {scanState === 'processing'
+              ? 'A processar sem interromper a câmara'
+              : scanState === 'capturing'
+                ? 'A capturar a folha'
               : scanState === 'ready'
                 ? 'Folha detetada'
                 : markerCount === 4
@@ -241,8 +235,10 @@ function ScannerCamera() {
                     : 'Coloque um quadrado preto em cada área'}
           </Text>
           <Text selectable style={styles.instructionBody}>
-            {scanState === 'capturing'
-              ? 'A fotografia será recortada entre os limites interiores dos quatro marcadores, sem as colunas laterais.'
+            {scanState === 'processing'
+              ? 'A validação final, o QR e as respostas estão a ser analisados. O resultado abre quando estiver completo.'
+              : scanState === 'capturing'
+                ? 'Mantenha a folha estável por um instante enquanto a fotografia é capturada.'
               : scanState === 'ready'
                 ? 'A captura é automática assim que a segunda leitura confirmar os marcadores.'
                 : markerCount === 4
@@ -293,75 +289,27 @@ function ScannerCamera() {
           </View>
 
           <ScrollView
-            bouncesZoom
-            centerContent
             contentInsetAdjustmentBehavior="automatic"
             contentContainerStyle={styles.cropScrollContent}
-            maximumZoomScale={4}
-            minimumZoomScale={1}
-            ref={cropScrollRef}
           >
             {capturedScan ? (
               <>
                 <MobileGradingSummary outcome={capturedScan.grading} />
                 {capturedScan.grading.status === 'graded' ? (
-                  <View
-                    onLayout={(event) => {
-                      visualReviewOffsetRef.current = event.nativeEvent.layout.y;
-                    }}
-                    style={styles.visualReviewContainer}
-                  >
+                  <View style={styles.visualReviewContainer}>
                     <MobileVisualQuestionReview
                       imageHeight={capturedScan.height}
-                      imageUri={capturedScan.imageUri}
                       imageWidth={capturedScan.width}
-                      onLocateQuestion={() => {
-                        cropScrollRef.current?.scrollTo({
-                          animated: true,
-                          y: Math.max(visualReviewOffsetRef.current - 8, 0),
-                        });
-                      }}
                       result={capturedScan.grading.result}
                     />
                   </View>
-                ) : (
-                  <Image
-                    accessibilityLabel="Fotografia canónica limpa da folha"
-                    resizeMode="contain"
-                    source={{ uri: capturedScan.imageUri }}
-                    style={{
-                      width: windowWidth - 32,
-                      height: (windowWidth - 32) * (capturedScan.height / capturedScan.width),
-                    }}
-                  />
-                )}
+                ) : null}
                 <MobileGradingDiagnostics
                   imageHeight={capturedScan.height}
                   imageWidth={capturedScan.width}
                   outcome={capturedScan.grading}
+                  pipelineTimings={capturedScan.pipelineTimings}
                 />
-                <Pressable
-                  accessibilityLabel="Partilhar a fotografia JPEG limpa"
-                  accessibilityRole="button"
-                  accessibilityState={{ busy: isSharing, disabled: isSharing }}
-                  disabled={isSharing}
-                  onPress={handleShareCrop}
-                  style={({ pressed }) => [
-                    styles.shareButton,
-                    pressed && !isSharing ? styles.shareButtonPressed : null,
-                    isSharing ? styles.shareButtonDisabled : null,
-                  ]}
-                >
-                  {isSharing ? <ActivityIndicator color="#FFFFFF" /> : null}
-                  <Text style={styles.shareButtonText}>
-                    {isSharing ? 'A preparar JPEG…' : 'Partilhar JPEG limpo'}
-                  </Text>
-                </Pressable>
-                {shareError ? (
-                  <Text selectable style={styles.shareError}>
-                    Não foi possível partilhar: {shareError}
-                  </Text>
-                ) : null}
                 <View style={styles.qrCard}>
                   <Text selectable style={styles.qrTitle}>
                     {capturedScan.qr ? 'Payload QR original' : 'QR não encontrado'}
@@ -582,21 +530,6 @@ const styles = StyleSheet.create({
     borderCurve: 'continuous',
     backgroundColor: '#FFFFFF',
   },
-  shareButton: {
-    minHeight: 50,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 10,
-    paddingHorizontal: 20,
-    borderRadius: 15,
-    borderCurve: 'continuous',
-    backgroundColor: '#15803D',
-  },
-  shareButtonPressed: { opacity: 0.82 },
-  shareButtonDisabled: { opacity: 0.64 },
-  shareButtonText: { color: '#FFFFFF', fontSize: 16, fontWeight: '700' },
-  shareError: { color: '#B91C1C', fontSize: 13, lineHeight: 18, textAlign: 'center' },
   qrTitle: { color: '#111827', fontSize: 17, fontWeight: '700' },
   qrMetadata: {
     color: '#1F2937',

@@ -1,10 +1,13 @@
 import {
   analyzeBubbleGradingImage,
+  analyzeValidatedBubbleGradingImage,
   BubbleAnalysisValidationFailure,
+  PROVISIONAL_BUBBLE_DETECTOR_CONFIG,
   type BubbleAnalysisResult,
   type BubbleReasonCode,
   type GrayscaleImage,
 } from './bubble-analysis';
+import { runOnRuntimeAsync, type WorkletRuntime } from 'react-native-worklets';
 import { hardcodedBubbleGradingSchema } from './hardcoded-schema';
 import {
   validateBubbleGradingSchema,
@@ -80,6 +83,7 @@ export function rgbaPixelsToGrayscaleImage(
   width: number,
   height: number,
 ): GrayscaleImage {
+  'worklet';
   const expectedLength = width * height * 4;
   if (rgba.byteLength !== expectedLength) {
     throw new Error(
@@ -97,6 +101,62 @@ export function rgbaPixelsToGrayscaleImage(
     targetIndex += 1;
   }
   return { width, height, data };
+}
+
+/** Runs the full-page grayscale conversion and ROI analyzer away from the RN runtime. */
+export async function analyzeMobileBubbleGradingImageOnRuntime(
+  runtime: WorkletRuntime,
+  rgba: Uint8Array,
+  width: number,
+  height: number,
+  qr: QrMetadata | null,
+): Promise<MobileGradingOutcome> {
+  const scanDiagnostics = readMobileScanDiagnostics(qr);
+  const validation = validateBubbleGradingSchema(hardcodedBubbleGradingSchema, {
+    inputImage: { width, height },
+  });
+  if (!validation.valid) {
+    return {
+      status: 'failed',
+      scanDiagnostics,
+      failure: {
+        kind: 'schema_validation',
+        message: 'O esquema fixo ou as dimensões da imagem canónica não são válidos.',
+        validationErrors: validation.errors,
+      },
+    };
+  }
+
+  try {
+    const result = await runOnRuntimeAsync(
+      runtime,
+      (
+        workerRgba: Uint8Array,
+        workerWidth: number,
+        workerHeight: number,
+        schema: typeof validation.schema,
+      ) => {
+        'worklet';
+        const grayscale = rgbaPixelsToGrayscaleImage(workerRgba, workerWidth, workerHeight);
+        return analyzeValidatedBubbleGradingImage(
+          schema,
+          grayscale,
+          PROVISIONAL_BUBBLE_DETECTOR_CONFIG,
+          { recordTiming: true },
+        );
+      },
+      rgba,
+      width,
+      height,
+      validation.schema,
+    );
+    return { status: 'graded', scanDiagnostics, result };
+  } catch (caught) {
+    return createMobileGradingFailure(
+      qr,
+      caught instanceof Error ? caught.message : String(caught),
+    );
+  }
 }
 
 /**

@@ -51,25 +51,30 @@ whether the provisional focus and contrast metrics are sufficient. Do not set
 
 ## Physical-iPhone verification checklist
 
+The responsiveness refinement after Phase 08 removes mobile JPEG display and
+sharing from the capture hot path. Validate the structured grading result and
+pipeline timings instead; the offline schema workbench remains the visual crop
+calibration tool.
+
 Static checks cannot complete these hardware acceptance checks. Use a real
 approximately 50-question sheet with up to roughly 250 bubbles and keep the
 diagnostic section open while recording timing.
 
 - Capture a sharp, normally lit sheet and confirm total analysis timing and all
   per-bubble timings are visible.
-- Capture deliberately blurry and low-contrast sheets. Confirm the clean image,
-  provisional score, affected questions, stable codes, and explanations remain
-  visible.
+- Capture deliberately blurry and low-contrast sheets. Confirm the provisional
+  score, affected questions, stable codes, and explanations remain visible.
 - Include a clearly filled extra selection and confirm it is **incorrect** with
   `extra_selection`, not **needs review**.
 - Repeat scans at several distances and perspectives. Confirm every accepted
   crop is 875 × 1280 px with stable marker-free boundaries.
 - Confirm `studentId`, `sheetId`, `testId`, and `schemaVersion` match the QR and
   do not select or reject the hardcoded schema.
-- Confirm score, correct/incorrect/review counts, clean and annotated views,
-  per-question answers, and locate-on-image behavior.
-- Share the clean JPEG and confirm the shared file contains no diagnostic
-  overlay and uses the preferred sheet-derived filename when available.
+- Confirm score, correct/incorrect/review counts, and per-question answers.
+- Confirm the preview remains visibly live through the processing state and the
+  result opens only after capture, QR, and grading are complete.
+- Record capture, decode, final detection, perspective/readback, QR, grading,
+  and total pipeline timings from **Diagnósticos técnicos**.
 - Repeat threshold changes only in the detector configuration file and confirm
   generated schema files remain untouched.
 

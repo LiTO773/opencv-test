@@ -108,17 +108,18 @@ function QuestionCard({
   question,
   selected,
 }: {
-  onLocate: () => void;
+  onLocate?: () => void;
   question: MobileQuestionReview;
   selected: boolean;
 }) {
   const color = REVIEW_COLORS[question.tone];
   return (
     <Pressable
-      accessibilityHint="Mostra esta pergunta destacada sobre a folha"
+      accessibilityHint={onLocate ? 'Mostra esta pergunta destacada sobre a folha' : undefined}
       accessibilityLabel={`${question.label}, ${question.statusLabel}`}
       accessibilityRole="button"
       accessibilityState={{ selected }}
+      disabled={!onLocate}
       onPress={onLocate}
       style={({ pressed }) => [
         styles.questionCard,
@@ -174,9 +175,11 @@ function QuestionCard({
           ))}
         </View>
       ) : null}
-      <Text selectable style={styles.locateHint}>
-        {selected ? 'Localizada na imagem' : 'Toque para localizar na imagem'}
-      </Text>
+      {onLocate ? (
+        <Text selectable style={styles.locateHint}>
+          {selected ? 'Localizada na imagem' : 'Toque para localizar na imagem'}
+        </Text>
+      ) : null}
     </Pressable>
   );
 }
@@ -189,20 +192,24 @@ export function MobileVisualQuestionReview({
   result,
 }: {
   imageHeight: number;
-  imageUri: string;
+  imageUri?: string;
   imageWidth: number;
   onLocateQuestion?: () => void;
   result: BubbleAnalysisResult;
 }) {
   const { width: windowWidth } = useWindowDimensions();
   const questions = useMemo(() => buildMobileQuestionReview(result), [result]);
+  const [showAllQuestions, setShowAllQuestions] = useState(false);
   const [selectedQuestionId, setSelectedQuestionId] = useState<string | null>(() =>
-    initialQuestionId(questions) ?? null,
+    imageUri ? (initialQuestionId(questions) ?? null) : null,
   );
   const selectedQuestion =
     questions.find((question) => question.questionId === selectedQuestionId) ?? questions[0];
   const renderedWidth = Math.max(1, Math.min(windowWidth - 64, 528));
   const renderedHeight = renderedWidth * (imageHeight / imageWidth);
+  const priorityQuestions = questions.filter((question) => question.status !== 'correct');
+  const initialQuestions = (priorityQuestions.length > 0 ? priorityQuestions : questions).slice(0, 10);
+  const visibleQuestions = showAllQuestions ? questions : initialQuestions;
 
   const selectQuestion = (questionId: string, locate: boolean) => {
     setSelectedQuestionId(questionId);
@@ -211,7 +218,9 @@ export function MobileVisualQuestionReview({
 
   return (
     <View style={styles.container}>
-      <View style={styles.reviewHeader}>
+      {imageUri ? (
+        <>
+          <View style={styles.reviewHeader}>
         <View style={styles.reviewHeading}>
           <Text selectable style={styles.reviewTitle}>Revisão visual</Text>
           <Text selectable style={styles.reviewSubtitle}>
@@ -248,9 +257,9 @@ export function MobileVisualQuestionReview({
             );
           })}
         </View>
-      </View>
+          </View>
 
-      <View style={[styles.imageFrame, { width: renderedWidth, height: renderedHeight }]}>
+          <View style={[styles.imageFrame, { width: renderedWidth, height: renderedHeight }]}>
         <Image
           accessibilityLabel={
             selectedQuestionId === null
@@ -283,9 +292,9 @@ export function MobileVisualQuestionReview({
             )}
           </View>
         ) : null}
-      </View>
+          </View>
 
-      {selectedQuestionId !== null ? (
+          {selectedQuestionId !== null ? (
         <>
           <View style={styles.legend}>
             {(
@@ -340,22 +349,35 @@ export function MobileVisualQuestionReview({
             </View>
           </ScrollView>
         </>
+          ) : null}
+        </>
       ) : null}
 
       <View style={styles.questionListHeader}>
         <Text selectable style={styles.questionListTitle}>Perguntas</Text>
-        <Text selectable style={styles.questionListCount}>{questions.length}</Text>
+        <Text selectable style={styles.questionListCount}>
+          {visibleQuestions.length}/{questions.length}
+        </Text>
       </View>
       <View style={styles.questionList}>
-        {questions.map((question) => (
+        {visibleQuestions.map((question) => (
           <QuestionCard
             key={question.questionId}
-            onLocate={() => selectQuestion(question.questionId, true)}
+            onLocate={imageUri ? () => selectQuestion(question.questionId, true) : undefined}
             question={question}
             selected={question.questionId === selectedQuestionId}
           />
         ))}
       </View>
+      {visibleQuestions.length < questions.length ? (
+        <Pressable
+          accessibilityRole="button"
+          onPress={() => setShowAllQuestions(true)}
+          style={styles.showAllButton}
+        >
+          <Text style={styles.showAllButtonText}>Mostrar todas as perguntas</Text>
+        </Pressable>
+      ) : null}
     </View>
   );
 }
@@ -433,6 +455,16 @@ const styles = StyleSheet.create({
     fontVariant: ['tabular-nums'],
   },
   questionList: { gap: 10 },
+  showAllButton: {
+    minHeight: 44,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 16,
+    borderRadius: 12,
+    borderCurve: 'continuous',
+    backgroundColor: '#E5E7EB',
+  },
+  showAllButtonText: { color: '#1F2937', fontSize: 14, fontWeight: '700' },
   questionCard: {
     gap: 11,
     padding: 14,
