@@ -70,3 +70,31 @@ pnpm schema:test
 ```
 
 Static checks do not validate the native JSI/worklet boundary. Before production, test on representative iOS and Android hardware with varied page sizes, backgrounds, lighting, shadows, glare, and camera orientations. Active four-point marker thresholds and QR hierarchy filtering live in `src/features/four-point/four-point-detection.ts`; pure whole-page candidate scoring lives in `src/features/four-point/four-point-layout.ts`.
+
+## Live desktop pipeline visualizer
+
+The standalone Python workbench shows all twelve stages of the current scanner
+and answer-grading pipeline at once. It reads the TypeScript schema, canonical
+crop contract, and detector thresholds directly from this repository.
+
+```bash
+python3 -m venv .venv-opencv
+source .venv-opencv/bin/activate
+python -m pip install -r tools/requirements-opencv.txt
+python tools/live_pipeline_visualizer.py --camera 0 --fullscreen
+```
+
+Continuity Camera landscape frames are rotated clockwise to portrait by
+default. Press `r` to cycle through rotation choices if the selected iPhone
+camera reports a different physical orientation. Use `--camera 1` (or another
+index) if Continuity Camera is not camera zero. The controls shown in the
+window can pause the live feed, toggle full screen, or save both the dashboard
+and the current canonical crop. A still image or recorded video can be used for
+repeatable debugging with `--input path/to/file`.
+
+The workbench deliberately runs the complete path on each displayed frame. The
+mobile app samples marker detection every second preview frame, requires two
+consecutive valid layouts, captures a still, and repeats marker detection on
+that still before continuing. QR decoding is the only implementation swap in
+the desktop workbench: Python OpenCV is used instead of the app's `jsQR`; QR
+metadata does not select the grading schema or change the answer key.

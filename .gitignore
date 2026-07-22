@@ -2,6 +2,7 @@
 
 # dependencies
 node_modules/
+.venv-opencv/
 
 # Expo
 .expo/
@@ -42,6 +43,7 @@ example
 /tools/schema-preview/input.jpg
 /tools/schema-preview/output.png
 /tools/schema-preview/result.json
+/tools/pipeline-captures/
 
 # generated native folders
 /ios
