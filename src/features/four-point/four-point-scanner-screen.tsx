@@ -20,6 +20,7 @@ import { MobileGradingSummary } from '@/features/bubble-grading/mobile-grading-s
 import { MobileGradingDiagnostics } from '@/features/bubble-grading/mobile-grading-diagnostics';
 import { MobileVisualQuestionReview } from '@/features/bubble-grading/mobile-visual-question-review';
 import { FourPointCamera } from '@/features/four-point/four-point-camera';
+import { getFourGuideScannerPresentation } from '@/features/four-point/six-marker-scanning';
 import type {
   FourPointScan,
   FourPointScanState,
@@ -89,7 +90,6 @@ function ScannerCamera() {
   }, []);
   const handleMarkerCountChange = useCallback((count: number) => {
     setMarkerCount(count);
-    if (count > 0) setProcessorError(null);
   }, []);
   const handleProcessorError = useCallback((message: string) => {
     setProcessorError(message);
@@ -118,16 +118,7 @@ function ScannerCamera() {
     );
   }
 
-  const statusLabel =
-    scanState === 'processing'
-      ? 'A reconhecer respostas'
-      : scanState === 'capturing'
-      ? 'A capturar fotografia'
-      : scanState === 'ready'
-        ? '4 marcadores encontrados'
-        : markerCount === 4
-          ? 'Alinhe os quatro marcadores'
-          : `${markerCount}/4 marcadores`;
+  const presentation = getFourGuideScannerPresentation(scanState, markerCount);
 
   return (
     <View style={styles.cameraScreen}>
@@ -177,7 +168,7 @@ function ScannerCamera() {
             ]}
           />
           <Text selectable style={styles.statusText}>
-            {statusLabel}
+            {presentation.statusLabel}
           </Text>
         </GlassView>
       </View>
@@ -222,28 +213,10 @@ function ScannerCamera() {
       >
         <GlassView colorScheme="dark" glassEffectStyle="regular" style={styles.instructionCard}>
           <Text selectable style={styles.instructionTitle}>
-            {scanState === 'processing'
-              ? 'A processar sem interromper a câmara'
-              : scanState === 'capturing'
-                ? 'A capturar a folha'
-              : scanState === 'ready'
-                ? 'Folha detetada'
-                : markerCount === 4
-                  ? 'Ajuste ligeiramente o enquadramento'
-                  : markerCount > 0
-                    ? 'Continue a alinhar a folha'
-                    : 'Coloque um quadrado preto em cada área'}
+            {presentation.instructionTitle}
           </Text>
           <Text selectable style={styles.instructionBody}>
-            {scanState === 'processing'
-              ? 'A validação final, o QR e as respostas estão a ser analisados. O resultado abre quando estiver completo.'
-              : scanState === 'capturing'
-                ? 'Mantenha a folha estável por um instante enquanto a fotografia é capturada.'
-              : scanState === 'ready'
-                ? 'A captura é automática assim que a segunda leitura confirmar os marcadores.'
-                : markerCount === 4
-                  ? 'Os quatro quadrados foram vistos, mas ainda não formam uma página vertical válida.'
-                  : 'Cada área funciona de forma independente e fica verde quando encontra o seu marcador.'}
+            {presentation.instructionBody}
           </Text>
         </GlassView>
       </View>

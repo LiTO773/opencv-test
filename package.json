@@ -44,7 +44,7 @@
     "ios": "expo run:ios --device",
     "lint": "expo lint",
     "schema:preview": "tsx tools/schema-preview/generate-overlay.ts",
-    "schema:test": "tsx --test tools/schema-preview/schema-preview.test.ts tools/schema-preview/four-point-layout.test.ts tools/schema-preview/six-marker-layout.test.ts"
+    "schema:test": "tsx --test tools/schema-preview/schema-preview.test.ts tools/schema-preview/four-point-layout.test.ts tools/schema-preview/six-marker-layout.test.ts tools/schema-preview/six-marker-scanning.test.ts"
   },
   "private": true
 }

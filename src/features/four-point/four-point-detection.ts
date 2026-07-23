@@ -12,11 +12,16 @@ import {
 
 import { countQrFinderNestingLevels } from '@/features/four-point/contour-hierarchy';
 import {
-  selectBestMarkerLayout,
-  strongestCandidatesAsMatches,
-  type MarkerCandidate,
-  type MarkerCandidateGroups,
-} from '@/features/four-point/four-point-layout';
+  selectBestSixMarkerLayout,
+  SIX_MARKER_POSITIONS,
+  strongestSixMarkerCandidatesAsMatches,
+  type SixMarkerCandidate,
+  type SixMarkerCandidateGroups,
+  type SixMarkerPosition,
+  type SixMarkerRegion,
+  type SixMarkerRegions,
+} from '@/features/four-point/six-marker-layout';
+import { createFourGuideAnalysis } from '@/features/four-point/six-marker-scanning';
 import type {
   FourPointAnalysis,
   MarkerMatch,
@@ -37,6 +42,19 @@ export function createMarkerRegions(
   analysisWidth: number,
   analysisHeight: number,
 ): [MarkerRegion, MarkerRegion, MarkerRegion, MarkerRegion] {
+  const regions = createSixMarkerRegions(analysisWidth, analysisHeight);
+  return [
+    { ...regions['top-left'], position: 'top-left' },
+    { ...regions['top-right'], position: 'top-right' },
+    { ...regions['bottom-right'], position: 'bottom-right' },
+    { ...regions['bottom-left'], position: 'bottom-left' },
+  ];
+}
+
+export function createSixMarkerRegions(
+  analysisWidth: number,
+  analysisHeight: number,
+): SixMarkerRegions {
   const pageWidth = analysisWidth * PAGE_WIDTH_FRACTION;
   const pageHeight = pageWidth * A4_HEIGHT_TO_WIDTH;
   const left = (analysisWidth - pageWidth) / 2;
@@ -49,10 +67,10 @@ export function createMarkerRegions(
   const halfRegion = regionSize / 2;
 
   const makeRegion = (
-    position: MarkerRegion['position'],
+    position: SixMarkerPosition,
     centerX: number,
     centerY: number,
-  ): MarkerRegion => ({
+  ): SixMarkerRegion => ({
     position,
     x: Math.round(Math.max(0, Math.min(analysisWidth - regionSize, centerX - halfRegion))),
     y: Math.round(Math.max(0, Math.min(analysisHeight - regionSize, centerY - halfRegion))),
@@ -60,12 +78,15 @@ export function createMarkerRegions(
     height: Math.round(regionSize),
   });
 
-  return [
-    makeRegion('top-left', left, top),
-    makeRegion('top-right', right, top),
-    makeRegion('bottom-right', right, bottom),
-    makeRegion('bottom-left', left, bottom),
-  ];
+  const middle = (top + bottom) / 2;
+  return {
+    'top-left': makeRegion('top-left', left, top),
+    'middle-left': makeRegion('middle-left', left, middle),
+    'bottom-left': makeRegion('bottom-left', left, bottom),
+    'top-right': makeRegion('top-right', right, top),
+    'middle-right': makeRegion('middle-right', right, middle),
+    'bottom-right': makeRegion('bottom-right', right, bottom),
+  };
 }
 
 function distance(first: Point2D, second: Point2D) {
@@ -140,7 +161,7 @@ function centerOf(points: Quadrilateral): Point2D {
 function markerFromPoints(
   points: Point2D[],
   grayscaleRegion: ReturnType<typeof OpenCV.bufferToMat>,
-  region: MarkerRegion,
+  region: SixMarkerRegion,
 ): { marker: MarkerMatch; score: number } | null {
   'worklet';
   if (points.length !== 4) return null;
@@ -221,8 +242,8 @@ function findMarkerCandidatesInRegion(
   source: ReturnType<typeof OpenCV.bufferToMat>,
   channels: 3 | 4,
   conversion: ColorConversionCodes,
-  region: MarkerRegion,
-): MarkerCandidate[] {
+  region: SixMarkerRegion,
+): SixMarkerCandidate[] {
   'worklet';
   const colorRegion = OpenCV.createObject(
     ObjectType.Mat,
@@ -283,7 +304,7 @@ function findMarkerCandidatesInRegion(
 
   const contourCount = OpenCV.toJSValue(contours).array.length;
   const hierarchyData = OpenCV.matToBuffer(hierarchy, 'int32').buffer;
-  const candidates: MarkerCandidate[] = [];
+  const candidates: SixMarkerCandidate[] = [];
   for (let index = 0; index < contourCount; index += 1) {
     // QR finder patterns are black/white/black nested squares. A filled page
     // marker has no such two-level family, so discard the QR family before its
@@ -314,7 +335,7 @@ function findMarkerCandidatesInRegion(
     }
   }
   candidates.sort((first, second) => second.appearanceScore - first.appearanceScore);
-  const distinctCandidates: MarkerCandidate[] = [];
+  const distinctCandidates: SixMarkerCandidate[] = [];
   for (const candidate of candidates) {
     let duplicatesExistingShape = false;
     for (const existing of distinctCandidates) {
@@ -342,7 +363,7 @@ function analyzePixels(
   conversion: ColorConversionCodes,
   analysisWidth: number,
   analysisHeight: number,
-  regions: readonly MarkerRegion[],
+  regions: SixMarkerRegions,
 ): FourPointAnalysis {
   'worklet';
   try {
@@ -354,39 +375,46 @@ function analyzePixels(
       new Uint8Array(pixelBuffer),
     );
 
-    const candidateGroups: [
-      MarkerCandidate[],
-      MarkerCandidate[],
-      MarkerCandidate[],
-      MarkerCandidate[],
-    ] = [[], [], [], []];
-    for (let index = 0; index < 4; index += 1) {
-      candidateGroups[index] = findMarkerCandidatesInRegion(
+    const candidateGroups: {
+      [Position in SixMarkerPosition]: SixMarkerCandidate[];
+    } = {
+      'top-left': [],
+      'middle-left': [],
+      'bottom-left': [],
+      'top-right': [],
+      'middle-right': [],
+      'bottom-right': [],
+    };
+    for (const position of SIX_MARKER_POSITIONS) {
+      candidateGroups[position] = findMarkerCandidatesInRegion(
         source,
         channels,
         conversion,
-        regions[index],
+        regions[position],
       );
     }
-    const groupedCandidates: MarkerCandidateGroups = candidateGroups;
-    const selectedLayout = selectBestMarkerLayout(groupedCandidates, regions);
-    const markers = selectedLayout?.markers ?? strongestCandidatesAsMatches(groupedCandidates);
-    const matchedCount = markers.reduce((count, marker) => count + (marker ? 1 : 0), 0);
-    return {
-      markers,
-      matchedCount,
-      cropQuadrilateral: selectedLayout?.cropQuadrilateral ?? null,
-    };
+    const groupedCandidates: SixMarkerCandidateGroups = candidateGroups;
+    const selectedLayout = selectBestSixMarkerLayout(
+      groupedCandidates,
+      regions,
+      { width: analysisWidth, height: analysisHeight },
+    );
+    const sixMarkerMatches =
+      selectedLayout?.markers ?? strongestSixMarkerCandidatesAsMatches(groupedCandidates);
+    return createFourGuideAnalysis(
+      sixMarkerMatches,
+      selectedLayout?.cropQuadrilateral ?? null,
+    );
   } finally {
     OpenCV.clearBuffers();
   }
 }
 
-export function detectFourPoints(
+export function detectSixMarkers(
   pixelBuffer: ArrayBuffer,
   analysisWidth: number,
   analysisHeight: number,
-  regions: readonly MarkerRegion[],
+  regions: SixMarkerRegions,
 ) {
   'worklet';
   return analyzePixels(
@@ -399,11 +427,11 @@ export function detectFourPoints(
   );
 }
 
-export function detectFourPointsFromRgba(
+export function detectSixMarkersFromRgba(
   pixelBuffer: ArrayBuffer,
   analysisWidth: number,
   analysisHeight: number,
-  regions: readonly MarkerRegion[],
+  regions: SixMarkerRegions,
 ) {
   'worklet';
   return analyzePixels(
@@ -414,6 +442,28 @@ export function detectFourPointsFromRgba(
     analysisHeight,
     regions,
   );
+}
+
+/** @deprecated The active four-guide scanner now validates six markers internally. */
+export function detectFourPoints(
+  pixelBuffer: ArrayBuffer,
+  analysisWidth: number,
+  analysisHeight: number,
+  regions: SixMarkerRegions,
+) {
+  'worklet';
+  return detectSixMarkers(pixelBuffer, analysisWidth, analysisHeight, regions);
+}
+
+/** @deprecated The active four-guide scanner now validates six markers internally. */
+export function detectFourPointsFromRgba(
+  pixelBuffer: ArrayBuffer,
+  analysisWidth: number,
+  analysisHeight: number,
+  regions: SixMarkerRegions,
+) {
+  'worklet';
+  return detectSixMarkersFromRgba(pixelBuffer, analysisWidth, analysisHeight, regions);
 }
 
 export function mapAnalysisToSource(

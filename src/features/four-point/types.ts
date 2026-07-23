@@ -1,4 +1,5 @@
 import type { MobileGradingOutcome } from '@/features/bubble-grading/mobile-bubble-grading';
+import type { PartialSixMarkerMatches } from '@/features/four-point/six-marker-layout';
 
 export type Point2D = {
   x: number;
@@ -34,9 +35,15 @@ export type FourPointAnalysis = {
   cropQuadrilateral: Quadrilateral | null;
   markers: MarkerMatches;
   matchedCount: number;
+  sixMarkerMatches: PartialSixMarkerMatches;
 };
 
-export type FourPointScanState = 'searching' | 'ready' | 'capturing' | 'processing';
+export type FourPointScanState =
+  | 'searching'
+  | 'validating'
+  | 'ready'
+  | 'capturing'
+  | 'processing';
 
 export type CapturePipelineTimings = {
   capturePhotoMs: number;

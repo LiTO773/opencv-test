@@ -33,8 +33,9 @@ import {
 } from '@/features/bubble-grading/mobile-bubble-grading';
 import {
   createMarkerRegions,
-  detectFourPoints,
-  detectFourPointsFromRgba,
+  createSixMarkerRegions,
+  detectSixMarkers,
+  detectSixMarkersFromRgba,
   mapAnalysisToSource,
 } from '@/features/four-point/four-point-detection';
 import {
@@ -42,6 +43,12 @@ import {
   readQrPayloadId,
   type QrPixelRegion,
 } from '@/features/four-point/qr-reader';
+import type { SixMarkerRegions } from '@/features/four-point/six-marker-layout';
+import {
+  createFourGuideAnalysis,
+  emptySixMarkerMatches,
+  evaluatePreviewValidation,
+} from '@/features/four-point/six-marker-scanning';
 import type {
   FourPointAnalysis,
   FourPointScan,
@@ -145,6 +152,17 @@ function nowMilliseconds() {
 
 function roundedMilliseconds(value: number) {
   return Number(value.toFixed(3));
+}
+
+function disposeNativeResource(
+  resource: { dispose: () => void } | null | undefined,
+) {
+  try {
+    resource?.dispose();
+  } catch {
+    // Preserve the primary capture/validation result while still attempting to
+    // dispose every remaining native resource.
+  }
 }
 
 function readCanonicalPixels(image: SkImage, width: number, height: number) {
@@ -406,14 +424,14 @@ function analyzeAndNormalizeCapturedImage(
   image: SkImage,
   analysisWidth: number,
   analysisHeight: number,
-  regions: readonly MarkerRegion[],
+  regions: SixMarkerRegions,
 ) {
   const detectionStartedAt = nowMilliseconds();
   const analysisBuffer = makeStillAnalysisBuffer(image, analysisWidth, analysisHeight);
   if (!analysisBuffer) {
     throw new Error('Não foi possível preparar a fotografia final para análise.');
   }
-  const analysis = detectFourPointsFromRgba(
+  const analysis = detectSixMarkersFromRgba(
     analysisBuffer,
     analysisWidth,
     analysisHeight,
@@ -427,7 +445,7 @@ function analyzeAndNormalizeCapturedImage(
       );
     }
     throw new Error(
-      'Os quatro marcadores da fotografia final já não formam uma folha vertical válida. Enquadre novamente.',
+      'A fotografia final não passou a validação da página. Mantenha a folha estável e tente novamente.',
     );
   }
   const scan = normalizeSnapshot(
@@ -514,11 +532,10 @@ function drawDetectionOverlay(
   }
 }
 
-const emptyAnalysis: FourPointAnalysis = {
-  cropQuadrilateral: null,
-  markers: [null, null, null, null],
-  matchedCount: 0,
-};
+const emptyAnalysis: FourPointAnalysis = createFourGuideAnalysis(
+  emptySixMarkerMatches(),
+  null,
+);
 
 export function FourPointCamera({
   device,
@@ -536,7 +553,11 @@ export function FourPointCamera({
     600,
     Math.min(960, Math.round((ANALYSIS_WIDTH * windowHeight) / windowWidth)),
   );
-  const regions = useMemo(
+  const detectionRegions = useMemo(
+    () => createSixMarkerRegions(ANALYSIS_WIDTH, analysisHeight),
+    [analysisHeight],
+  );
+  const guideRegions = useMemo(
     () => createMarkerRegions(ANALYSIS_WIDTH, analysisHeight),
     [analysisHeight],
   );
@@ -585,6 +606,7 @@ export function FourPointCamera({
   const captureFinalPhoto = useCallback(async () => {
     let photo: Photo | null = null;
     let decodedPhoto: Awaited<ReturnType<typeof makeSkiaImageFromPhoto>> | null = null;
+    let captureFailed = false;
     const pipelineStartedAt = nowMilliseconds();
     try {
       const captureStartedAt = nowMilliseconds();
@@ -603,7 +625,7 @@ export function FourPointCamera({
         decodedPhoto.image,
         ANALYSIS_WIDTH,
         analysisHeight,
-        regions,
+        detectionRegions,
       );
       const gradingStartedAt = nowMilliseconds();
       const grading = await analyzeMobileBubbleGradingImageOnRuntime(
@@ -641,7 +663,7 @@ export function FourPointCamera({
         },
       });
     } catch (caught) {
-      didCapture.value = false;
+      captureFailed = true;
       consecutiveMatches.value = 0;
       lastAnalysis.value = emptyAnalysis;
       lastReportedMarkerCount.value = 0;
@@ -650,11 +672,12 @@ export function FourPointCamera({
       onScanStateChange('searching');
       onProcessorError(caught instanceof Error ? caught.message : String(caught));
     } finally {
-      decodedPhoto?.image.dispose();
-      decodedPhoto?.sourceImage?.dispose();
-      decodedPhoto?.surface?.dispose();
-      decodedPhoto?.data.dispose();
-      photo?.dispose();
+      disposeNativeResource(decodedPhoto?.image);
+      disposeNativeResource(decodedPhoto?.sourceImage);
+      disposeNativeResource(decodedPhoto?.surface);
+      disposeNativeResource(decodedPhoto?.data);
+      disposeNativeResource(photo);
+      if (captureFailed) didCapture.value = false;
     }
   }, [
     analysisHeight,
@@ -671,7 +694,7 @@ export function FourPointCamera({
     onScanStateChange,
     photoOutput,
     renderedFrameCount,
-    regions,
+    detectionRegions,
   ]);
 
   const reportMarkerCount = useCallback(
@@ -692,38 +715,36 @@ export function FourPointCamera({
       : never) => {
       'worklet';
       try {
+        let shouldCapture = false;
         renderedFrameCount.value += 1;
         frameCounter.value = (frameCounter.value + 1) % DETECTION_INTERVAL_FRAMES;
         if (!didCapture.value && frameCounter.value === 0 && resizerState.resizer) {
           const resizedFrame = resizerState.resizer.resize(frame);
           try {
-            const analysis = detectFourPoints(
+            const analysis = detectSixMarkers(
               resizedFrame.getPixelBuffer(),
               ANALYSIS_WIDTH,
               analysisHeight,
-              regions,
+              detectionRegions,
             );
             lastAnalysis.value = analysis;
+            didReportProcessorError.value = false;
             if (analysis.matchedCount !== lastReportedMarkerCount.value) {
               lastReportedMarkerCount.value = analysis.matchedCount;
               scheduleOnRN(reportMarkerCount, analysis.matchedCount);
             }
 
-            if (analysis.cropQuadrilateral) {
-              consecutiveMatches.value += 1;
-              if (
-                consecutiveMatches.value < CONFIRMATION_FRAMES &&
-                lastReportedScanState.value !== 'ready'
-              ) {
-                lastReportedScanState.value = 'ready';
-                scheduleOnRN(reportScanState, 'ready');
-              }
-            } else {
-              consecutiveMatches.value = 0;
-              if (lastReportedScanState.value !== 'searching') {
-                lastReportedScanState.value = 'searching';
-                scheduleOnRN(reportScanState, 'searching');
-              }
+            const validation = evaluatePreviewValidation(
+              analysis,
+              consecutiveMatches.value,
+              CONFIRMATION_FRAMES,
+              didCapture.value,
+            );
+            consecutiveMatches.value = validation.consecutiveCompleteLayouts;
+            shouldCapture = validation.shouldCapture;
+            if (lastReportedScanState.value !== validation.scanState) {
+              lastReportedScanState.value = validation.scanState;
+              scheduleOnRN(reportScanState, validation.scanState);
             }
           } finally {
             resizedFrame.dispose();
@@ -731,10 +752,6 @@ export function FourPointCamera({
         }
 
         const analysis = lastAnalysis.value;
-        const shouldCapture =
-          analysis.cropQuadrilateral !== null &&
-          consecutiveMatches.value >= CONFIRMATION_FRAMES &&
-          !didCapture.value;
         render(({ canvas, frameTexture }) => {
           'worklet';
           canvas.drawImage(frameTexture, 0, 0);
@@ -742,7 +759,7 @@ export function FourPointCamera({
             canvas,
             frame,
             analysis,
-            regions,
+            guideRegions,
             ANALYSIS_WIDTH,
             analysisHeight,
           );
@@ -757,6 +774,7 @@ export function FourPointCamera({
         }
       } catch (caught) {
         consecutiveMatches.value = 0;
+        lastAnalysis.value = emptyAnalysis;
         render(({ canvas, frameTexture }) => {
           'worklet';
           canvas.drawImage(frameTexture, 0, 0);
@@ -764,11 +782,19 @@ export function FourPointCamera({
             canvas,
             frame,
             emptyAnalysis,
-            regions,
+            guideRegions,
             ANALYSIS_WIDTH,
             analysisHeight,
           );
         });
+        if (lastReportedMarkerCount.value !== 0) {
+          lastReportedMarkerCount.value = 0;
+          scheduleOnRN(reportMarkerCount, 0);
+        }
+        if (lastReportedScanState.value !== 'searching') {
+          lastReportedScanState.value = 'searching';
+          scheduleOnRN(reportScanState, 'searching');
+        }
         if (!didReportProcessorError.value) {
           didReportProcessorError.value = true;
           scheduleOnRN(
@@ -787,12 +813,13 @@ export function FourPointCamera({
       consecutiveMatches,
       didCapture,
       didReportProcessorError,
+      detectionRegions,
       frameCounter,
+      guideRegions,
       lastAnalysis,
       lastReportedMarkerCount,
       lastReportedScanState,
       onProcessorError,
-      regions,
       renderedFrameCount,
       reportMarkerCount,
       reportScanState,
