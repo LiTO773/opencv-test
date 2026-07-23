@@ -39,6 +39,12 @@ import {
   mapAnalysisToSource,
 } from '@/features/four-point/four-point-detection';
 import {
+  calibratePageReferences,
+  mapPageCalibrationLayout,
+  rotatePageCalibrationEvidence180,
+  type PageCalibrationResult,
+} from '@/features/four-point/page-calibration';
+import {
   readQrMetadataInRegions,
   readQrPayloadId,
   type QrPixelRegion,
@@ -178,6 +184,23 @@ function readCanonicalPixels(image: SkImage, width: number, height: number) {
   const copy = new Uint8Array(pixels.byteLength);
   copy.set(pixels);
   return copy;
+}
+
+function readStillCalibrationPixels(image: SkImage) {
+  const width = image.width();
+  const height = image.height();
+  const pixels = image.readPixels(0, 0, {
+    alphaType: AlphaType.Unpremul,
+    colorType: ColorType.RGBA_8888,
+    width,
+    height,
+  });
+  if (!pixels || pixels instanceof Float32Array) {
+    throw new Error(
+      'Não foi possível ler os píxeis da fotografia final para calibração.',
+    );
+  }
+  return { width, height, data: pixels, channels: 4 as const };
 }
 
 function rotateRgba180InPlace(pixels: Uint8Array) {
@@ -448,6 +471,33 @@ function analyzeAndNormalizeCapturedImage(
       'A fotografia final não passou a validação da página. Mantenha a folha estável e tente novamente.',
     );
   }
+  if (!analysis.pageLayout) {
+    throw new Error(
+      'A fotografia final não forneceu o contrato completo dos seis marcadores.',
+    );
+  }
+
+  const calibrationStartedAt = nowMilliseconds();
+  const sourceLayout = mapPageCalibrationLayout(analysis.pageLayout, (point) =>
+    mapAnalysisToSource(
+      point,
+      analysisWidth,
+      analysisHeight,
+      image.width(),
+      image.height(),
+    ),
+  );
+  const calibration = calibratePageReferences(
+    readStillCalibrationPixels(image),
+    sourceLayout,
+  );
+  const calibrationMs = roundedMilliseconds(
+    nowMilliseconds() - calibrationStartedAt,
+  );
+  if (!calibration.valid) {
+    throw new PageCalibrationRejectedError(calibration);
+  }
+
   const scan = normalizeSnapshot(
     image,
     analysis.cropQuadrilateral,
@@ -455,7 +505,28 @@ function analyzeAndNormalizeCapturedImage(
     analysisHeight,
   );
   if (!scan) throw new Error('Não foi possível corrigir a perspetiva da fotografia.');
-  return { ...scan, finalDetectionMs };
+  return {
+    ...scan,
+    calibration:
+      scan.qr?.rotationApplied === 180
+        ? rotatePageCalibrationEvidence180(calibration)
+        : calibration,
+    calibrationMs,
+    finalDetectionMs,
+  };
+}
+
+class PageCalibrationRejectedError extends Error {
+  constructor(readonly calibration: PageCalibrationResult) {
+    super(
+      calibration.findings.length > 0
+        ? calibration.findings
+            .map((finding) => `[${finding.code}] ${finding.explanation}`)
+            .join(' ')
+        : 'A fotografia final não forneceu referências de calibração fiáveis.',
+    );
+    this.name = 'PageCalibrationRejectedError';
+  }
 }
 
 function drawQuadrilateral(
@@ -647,10 +718,12 @@ export function FourPointCamera({
         qr: canonical.qr,
         studentId: canonical.qr ? readQrPayloadId(canonical.qr, 'studentId') : null,
         grading,
+        calibration: canonical.calibration,
         pipelineTimings: {
           capturePhotoMs,
           decodePhotoMs,
           finalDetectionMs: canonical.finalDetectionMs,
+          calibrationMs: canonical.calibrationMs,
           perspectiveCorrectionMs: canonical.perspectiveCorrectionMs,
           qrDecodeMs: canonical.qrDecodeMs,
           gradingMs,

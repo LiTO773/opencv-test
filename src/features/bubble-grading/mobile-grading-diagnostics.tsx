@@ -3,6 +3,7 @@ import { Pressable, StyleSheet, Text, View } from 'react-native';
 
 import type { MobileGradingOutcome } from './mobile-bubble-grading';
 import type { CapturePipelineTimings } from '../four-point/types';
+import type { PageCalibrationResult } from '../four-point/page-calibration';
 import {
   buildMobileGradingDiagnosticRecord,
   type DiagnosticReason,
@@ -104,11 +105,13 @@ function Disclosure({
 }
 
 export function MobileGradingDiagnostics({
+  calibration,
   imageHeight,
   imageWidth,
   outcome,
   pipelineTimings,
 }: {
+  calibration?: PageCalibrationResult;
   imageHeight: number;
   imageWidth: number;
   outcome: MobileGradingOutcome;
@@ -183,12 +186,68 @@ export function MobileGradingDiagnostics({
           <ReasonRows emptyLabel="Nenhum motivo global registado." reasons={record.scan.reviewReasons} />
         </View>
 
+        {calibration ? (
+          <View style={styles.section}>
+            <Text selectable style={styles.sectionTitle}>Calibração da página</Text>
+            <DiagnosticRow label="contrato" value={calibration.contractVersion} />
+            <DiagnosticRow
+              label="estado"
+              value={calibration.valid ? 'válida' : 'inválida'}
+            />
+            <DiagnosticRow
+              label="preto robusto"
+              value={`${formatNumber(calibration.black.robustValue, 3)} · ${calibration.black.acceptedSampleCount} aceites / ${calibration.black.rejectedSampleCount} rejeitadas`}
+            />
+            <DiagnosticRow
+              label="branco robusto"
+              value={`${formatNumber(calibration.white.robustValue, 3)} · ${calibration.white.acceptedTileCount} aceites / ${calibration.white.rejectedTileCount} rejeitadas`}
+            />
+            <DiagnosticRow
+              label="intervalo dinâmico"
+              value={formatNumber(calibration.dynamicRange, 3)}
+            />
+            <DiagnosticRow
+              label="dispersão"
+              value={`preto ${formatNumber(calibration.black.dispersion, 3)} · branco ${formatNumber(calibration.white.dispersion, 3)}`}
+            />
+            <DiagnosticRow
+              label="tempo"
+              value={`${formatNumber(calibration.durationMs, 3)} ms`}
+            />
+            <Text selectable style={styles.subsectionTitle}>Marcadores pretos</Text>
+            {calibration.black.samples.map((sample) => (
+              <DiagnosticRow
+                key={sample.id}
+                label={sample.markerPosition ?? sample.id}
+                value={
+                  sample.statistics
+                    ? `${sample.accepted ? 'aceite' : `rejeitada:${sample.rejectionCode}`} · mediana ${sample.statistics.median} · MAD ${sample.statistics.dispersion} · posição (${formatNumber(sample.normalizedPagePosition.x, 3)}, ${formatNumber(sample.normalizedPagePosition.y, 3)})`
+                    : `rejeitada:${sample.rejectionCode}`
+                }
+              />
+            ))}
+            <Text selectable style={styles.subsectionTitle}>Corredores brancos</Text>
+            {Object.values(calibration.white.corridors).map((corridor) => (
+              <DiagnosticRow
+                key={corridor.position}
+                label={corridor.position}
+                value={`${formatNumber(corridor.robustWhiteValue, 3)} · ${corridor.acceptedTileCount} aceites / ${corridor.rejectedTileCount} rejeitadas · dispersão ${formatNumber(corridor.dispersion, 3)}`}
+              />
+            ))}
+            <ReasonRows
+              emptyLabel="Nenhuma falha de calibração registada."
+              reasons={calibration.findings}
+            />
+          </View>
+        ) : null}
+
         {pipelineTimings ? (
           <View style={styles.section}>
             <Text selectable style={styles.sectionTitle}>Pipeline de captura</Text>
             <DiagnosticRow label="captura" value={`${pipelineTimings.capturePhotoMs} ms`} />
             <DiagnosticRow label="descodificação" value={`${pipelineTimings.decodePhotoMs} ms`} />
             <DiagnosticRow label="deteção final" value={`${pipelineTimings.finalDetectionMs} ms`} />
+            <DiagnosticRow label="calibração" value={`${pipelineTimings.calibrationMs} ms`} />
             <DiagnosticRow
               label="perspetiva e leitura"
               value={`${pipelineTimings.perspectiveCorrectionMs} ms`}

@@ -1,5 +1,9 @@
 import type { MobileGradingOutcome } from '@/features/bubble-grading/mobile-bubble-grading';
-import type { PartialSixMarkerMatches } from '@/features/four-point/six-marker-layout';
+import type {
+  PartialSixMarkerMatches,
+  SelectedSixMarkerLayout,
+} from '@/features/four-point/six-marker-layout';
+import type { PageCalibrationResult } from '@/features/four-point/page-calibration';
 
 export type Point2D = {
   x: number;
@@ -36,6 +40,7 @@ export type FourPointAnalysis = {
   markers: MarkerMatches;
   matchedCount: number;
   sixMarkerMatches: PartialSixMarkerMatches;
+  pageLayout: SelectedSixMarkerLayout | null;
 };
 
 export type FourPointScanState =
@@ -49,6 +54,7 @@ export type CapturePipelineTimings = {
   capturePhotoMs: number;
   decodePhotoMs: number;
   finalDetectionMs: number;
+  calibrationMs: number;
   perspectiveCorrectionMs: number;
   qrDecodeMs: number;
   gradingMs: number;
@@ -86,5 +92,6 @@ export type FourPointScan = {
   qr: QrMetadata | null;
   studentId: string | null;
   grading: MobileGradingOutcome;
+  calibration: PageCalibrationResult;
   pipelineTimings: CapturePipelineTimings;
 };

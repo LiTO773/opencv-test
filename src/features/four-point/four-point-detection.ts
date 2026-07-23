@@ -404,6 +404,7 @@ function analyzePixels(
     return createFourGuideAnalysis(
       sixMarkerMatches,
       selectedLayout?.cropQuadrilateral ?? null,
+      selectedLayout,
     );
   } finally {
     OpenCV.clearBuffers();

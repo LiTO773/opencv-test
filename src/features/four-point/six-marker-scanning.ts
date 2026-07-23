@@ -1,5 +1,6 @@
 import type {
   PartialSixMarkerMatches,
+  SelectedSixMarkerLayout,
 } from '@/features/four-point/six-marker-layout';
 import type {
   FourPointAnalysis,
@@ -36,6 +37,7 @@ export function emptySixMarkerMatches(): PartialSixMarkerMatches {
 export function createFourGuideAnalysis(
   sixMarkerMatches: PartialSixMarkerMatches,
   cropQuadrilateral: Quadrilateral | null,
+  pageLayout: SelectedSixMarkerLayout | null = null,
 ): FourPointAnalysis {
   'worklet';
   const markers: MarkerMatches = [
@@ -53,6 +55,7 @@ export function createFourGuideAnalysis(
     markers,
     matchedCount,
     sixMarkerMatches,
+    pageLayout,
   };
 }
 

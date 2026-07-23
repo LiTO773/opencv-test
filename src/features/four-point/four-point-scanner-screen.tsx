@@ -278,6 +278,7 @@ function ScannerCamera() {
                   </View>
                 ) : null}
                 <MobileGradingDiagnostics
+                  calibration={capturedScan.calibration}
                   imageHeight={capturedScan.height}
                   imageWidth={capturedScan.width}
                   outcome={capturedScan.grading}
