@@ -51,7 +51,7 @@ export type MobileGradingDiagnosticRecord = {
       matchesExpected: boolean;
     };
     qrMetadata: MobileScanDiagnostics;
-    detector: { id: string; provisional: true } | null;
+    detector: { id: string; provisional: boolean } | null;
     globalQuality: {
       averageBackgroundBrightness: number;
       minimumFocusScore: number;
@@ -69,6 +69,19 @@ export type MobileGradingDiagnosticRecord = {
     validationErrors: { code: string; path: string; message: string }[];
   } | null;
 };
+
+type DiagnosticCompatibleMobileOutcome =
+  | Extract<MobileGradingOutcome, { status: 'failed' }>
+  | (Omit<
+      Extract<MobileGradingOutcome, { status: 'graded' }>,
+      'evidenceSession'
+    > & {
+      /** Pre-seam fixtures may omit the session wrapper; production outcomes do not. */
+      evidenceSession?: Extract<
+        MobileGradingOutcome,
+        { status: 'graded' }
+      >['evidenceSession'];
+    });
 
 export const BUBBLE_REASON_EXPLANATIONS: Record<BubbleReasonCode, string> = {
   center_adjusted:
@@ -155,7 +168,7 @@ function buildBubbleRecord(bubble: BubbleDiagnostic): BubbleDiagnosticRecord {
 }
 
 export function buildMobileGradingDiagnosticRecord(
-  outcome: MobileGradingOutcome,
+  outcome: DiagnosticCompatibleMobileOutcome,
   measuredImage: ImageDimensions,
 ): MobileGradingDiagnosticRecord {
   const expected = {

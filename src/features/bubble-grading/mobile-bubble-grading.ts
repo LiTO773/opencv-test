@@ -1,7 +1,4 @@
 import {
-  analyzeBubbleGradingImage,
-  analyzeValidatedBubbleGradingImage,
-  BubbleAnalysisValidationFailure,
   PROVISIONAL_BUBBLE_DETECTOR_CONFIG,
   type BubbleAnalysisResult,
   type BubbleReasonCode,
@@ -13,6 +10,14 @@ import {
   validateBubbleGradingSchema,
   type SchemaValidationError,
 } from './schema-validator';
+import {
+  analyzeEvidenceSession,
+  analyzeValidatedEvidenceSession,
+  EVIDENCE_SESSION_CONTRACT_VERSION,
+  EvidenceSessionValidationFailure,
+  type EvidenceSessionAnalysisResult,
+  type EvidenceSessionInput,
+} from './evidence-session';
 import { readQrPayloadId } from '../four-point/qr-reader';
 import type { QrMetadata } from '../four-point/types';
 
@@ -34,6 +39,7 @@ export type MobileGradingOutcome =
       status: 'graded';
       scanDiagnostics: MobileScanDiagnostics;
       result: BubbleAnalysisResult;
+      evidenceSession: EvidenceSessionAnalysisResult;
     }
   | {
       status: 'failed';
@@ -52,6 +58,51 @@ const REVIEW_REASON_CODES = new Set<BubbleReasonCode>([
   'excessive_blur',
   'measurement_region_incomplete',
 ]);
+
+function singleFrameEvidenceSessionInput(
+  schema: EvidenceSessionInput['schema'],
+  image: GrayscaleImage,
+  scanDiagnostics: MobileScanDiagnostics,
+): EvidenceSessionInput {
+  'worklet';
+  return {
+    contractVersion: EVIDENCE_SESSION_CONTRACT_VERSION,
+    sessionId: scanDiagnostics.sheetId ?? 'mobile-single-frame-session',
+    schema,
+    template: {
+      id: schema.test.id,
+      version: schema.test.version,
+      correctionBoxStyleIds: [],
+    },
+    detectorConfig: PROVISIONAL_BUBBLE_DETECTOR_CONFIG,
+    frames: [{
+      frameId: 'mobile-canonical-frame-0',
+      sequence: 0,
+      capturedAtMs: 0,
+      registration: {
+        status: 'registered',
+        coordinateSystem: 'canonical-crop-pixels',
+      },
+      quality: { status: 'credible', reasonCodes: [] },
+      canonicalImage: image,
+    }],
+  };
+}
+
+function legacyResultFromEvidenceSession(
+  evidenceSession: EvidenceSessionAnalysisResult,
+): BubbleAnalysisResult {
+  'worklet';
+  const frameAnalysis = evidenceSession.frames[0].analysis;
+  return {
+    diagnosticFormatVersion: frameAnalysis.diagnosticFormatVersion,
+    detector: frameAnalysis.detector,
+    scan: evidenceSession.combined.scan,
+    bubbles: evidenceSession.combined.bubbles,
+    questions: evidenceSession.combined.questions,
+    score: evidenceSession.combined.score,
+  };
+}
 
 export function readMobileScanDiagnostics(qr: QrMetadata | null): MobileScanDiagnostics {
   return {
@@ -135,13 +186,16 @@ export async function analyzeMobileBubbleGradingImageOnRuntime(
         workerWidth: number,
         workerHeight: number,
         schema: typeof validation.schema,
+        workerScanDiagnostics: MobileScanDiagnostics,
       ) => {
         'worklet';
         const grayscale = rgbaPixelsToGrayscaleImage(workerRgba, workerWidth, workerHeight);
-        return analyzeValidatedBubbleGradingImage(
-          schema,
-          grayscale,
-          PROVISIONAL_BUBBLE_DETECTOR_CONFIG,
+        return analyzeValidatedEvidenceSession(
+          singleFrameEvidenceSessionInput(
+            schema,
+            grayscale,
+            workerScanDiagnostics,
+          ),
           { recordTiming: true },
         );
       },
@@ -149,8 +203,14 @@ export async function analyzeMobileBubbleGradingImageOnRuntime(
       width,
       height,
       validation.schema,
+      scanDiagnostics,
     );
-    return { status: 'graded', scanDiagnostics, result };
+    return {
+      status: 'graded',
+      scanDiagnostics,
+      result: legacyResultFromEvidenceSession(result),
+      evidenceSession: result,
+    };
   } catch (caught) {
     return createMobileGradingFailure(
       qr,
@@ -184,22 +244,29 @@ export function analyzeMobileBubbleGradingImage(
   }
 
   try {
+    const evidenceSession = analyzeEvidenceSession(
+      singleFrameEvidenceSessionInput(
+        validation.schema,
+        image,
+        scanDiagnostics,
+      ),
+      { recordTiming: true },
+    );
     return {
       status: 'graded',
       scanDiagnostics,
-      result: analyzeBubbleGradingImage(validation.schema, image, undefined, {
-        recordTiming: true,
-      }),
+      result: legacyResultFromEvidenceSession(evidenceSession),
+      evidenceSession,
     };
   } catch (caught) {
-    if (caught instanceof BubbleAnalysisValidationFailure) {
+    if (caught instanceof EvidenceSessionValidationFailure) {
       return {
         status: 'failed',
         scanDiagnostics,
         failure: {
           kind: 'schema_validation',
           message: caught.message,
-          validationErrors: caught.validationErrors,
+          validationErrors: [...caught.validationErrors],
         },
       };
     }

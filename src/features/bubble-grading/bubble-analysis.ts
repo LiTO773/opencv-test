@@ -112,7 +112,7 @@ export type BubbleAnalysisResult = {
   diagnosticFormatVersion: typeof BUBBLE_DIAGNOSTIC_FORMAT_VERSION;
   detector: {
     id: string;
-    provisional: true;
+    provisional: boolean;
   };
   scan: {
     image: ImageDimensions;
@@ -674,7 +674,7 @@ export function analyzeValidatedBubbleGradingImage(
   const grading = gradeBubbleDiagnostics(schema, bubbles);
   return {
     diagnosticFormatVersion: BUBBLE_DIAGNOSTIC_FORMAT_VERSION,
-    detector: { id: config.id, provisional: true },
+    detector: { id: config.id, provisional: config.provisional },
     scan: {
       image: { width: image.width, height: image.height },
       bubbleCount: bubbles.length,

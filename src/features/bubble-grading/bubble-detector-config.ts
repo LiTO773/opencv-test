@@ -6,9 +6,12 @@
  * measured on the target iPhone. Phase 08 diagnostics expose every value below
  * beside the measurement that it influences.
  */
+export const BUBBLE_DETECTOR_CONFIG_FORMAT_VERSION = 1 as const;
+
 export type BubbleDetectorConfig = Readonly<{
+  formatVersion: typeof BUBBLE_DETECTOR_CONFIG_FORMAT_VERSION;
   id: string;
-  provisional: true;
+  provisional: boolean;
   darkPixelDelta: number;
   unfilledMaxDarkPixelRatio: number;
   filledMinDarkPixelRatio: number;
@@ -19,6 +22,7 @@ export type BubbleDetectorConfig = Readonly<{
 
 export const PROVISIONAL_BUBBLE_DETECTOR_CONFIG: BubbleDetectorConfig =
   Object.freeze({
+    formatVersion: BUBBLE_DETECTOR_CONFIG_FORMAT_VERSION,
     id: 'provisional-physical-calibration-required-v1',
     provisional: true,
     darkPixelDelta: 0.1,
