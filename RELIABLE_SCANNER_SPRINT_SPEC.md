@@ -14,7 +14,7 @@ The sprint must make scanning materially more reliable by requiring and validati
 
 ## Solution
 
-The scanner will recognize the complete six-marker page layout: top, middle, and bottom markers in both margins. A coherent six-marker layout will be required both in consecutive preview analyses and during independent validation of the captured still photograph. The outer four marker corners will continue to define the marker-free canonical crop, while the middle markers will improve whole-page validation and calibration.
+The scanner backend will recognize the complete six-marker page layout: top, middle, and bottom markers in both margins. A coherent six-marker layout will be required both in consecutive preview analyses and during independent validation of the captured still photograph. The user will continue aligning only the four outer corner guides; middle-marker detection will remain an internal validation and calibration detail. The outer four marker corners will continue to define the marker-free canonical crop, while the middle markers will improve whole-page validation and calibration.
 
 After the accepted still photograph has been physically oriented and all six markers have been detected, the scanner will measure the interiors of the black markers and robustly sample guaranteed blank-paper corridors between adjacent markers. These measurements will be associated with their page-relative locations and used to construct a low-complexity page-wide illumination model. Bubble darkness will be expressed relative to the expected local paper and black levels instead of relying on raw grayscale exposure.
 
@@ -32,7 +32,7 @@ All processing will remain on-device. QR metadata will remain diagnostic-only an
 
 2. As a Portuguese teacher, I want the scanner to reject an unreadable photograph, so that it does not confidently assign an incorrect score.
 
-3. As a Portuguese teacher, I want automatic capture to occur only when the complete printed marker layout is visible, so that the captured sheet is geometrically trustworthy.
+3. As a Portuguese teacher, I want to align only the four outer corner guides while the scanner validates the complete page internally, so that scanning stays simple without sacrificing geometric confidence.
 
 4. As a Portuguese teacher, I want clear guidance when calibration fails, so that I know whether to adjust the sheet, lighting, focus, or framing.
 
@@ -118,7 +118,11 @@ All processing will remain on-device. QR metadata will remain diagnostic-only an
 
 - The active scanner's QR finder-pattern hierarchy rejection, multi-candidate page scoring, still-photo revalidation, orientation handling, canonical crop contract, on-device grading, and structured diagnostics will be preserved.
 
-- Marker identity will be explicit and stable: top-left, middle-left, bottom-left, top-right, middle-right, and bottom-right. Any public marker count, overlay, capture-readiness state, and diagnostic record will use six as the complete layout.
+- Marker identity will be explicit and stable internally: top-left, middle-left, bottom-left, top-right, middle-right, and bottom-right. Technical diagnostics may expose all six markers.
+
+- The user-facing camera UI will continue to show only the four outer corner guides and a `0/4` outer-marker count. It will not display middle-marker targets, request six-marker alignment, or expose a `0/6` count.
+
+- Once all four outer markers are aligned, the UI may enter a neutral hold-steady or validating state while the backend confirms the middle markers and complete page geometry. New or changed messages have no language requirement.
 
 - A valid automatic capture requires a coherent six-marker layout across the configured number of consecutive analyzed preview frames. Four outer markers without the two middle markers are not sufficient for capture.
 
@@ -215,6 +219,8 @@ All processing will remain on-device. QR metadata will remain diagnostic-only an
 - A non-convex, landscape, implausibly narrow, implausibly wide, curved beyond supported tolerance, or internally inconsistent layout must be rejected.
 
 - Preview readiness tests and final-still acceptance tests must exercise the same layout contract and produce consistent validity decisions from equivalent evidence.
+
+- Camera UI tests will verify that only four outer alignment guides and a maximum `4/4` count are presented even though backend readiness requires all six markers.
 
 - Calibration tests will cover clean uniform exposure, globally dim exposure, globally bright exposure, smooth left-to-right gradients, smooth top-to-bottom gradients, and combined bounded gradients.
 

@@ -2,7 +2,7 @@
 
 **What to build:** Every accepted still must yield trustworthy page-wide calibration evidence by measuring all six black marker interiors and robustly sampling blank paper between adjacent markers. Unusable calibration must fail safely before a confident grade is produced.
 
-**Blocked by:** 02 — Activate six-marker scanning and still validation.
+**Blocked by:** 02 — Add backend six-marker validation to the four-guide scanner.
 
 **Status:** ready-for-agent
 
