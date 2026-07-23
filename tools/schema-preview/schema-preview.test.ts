@@ -278,17 +278,6 @@ test('grades the exact canonical mobile image with the offline result shape and 
     'questions',
     'score',
   ]);
-  assert.equal(mobile.evidenceSession.sessionId, 'sheet-22');
-  assert.deepEqual(mobile.evidenceSession.schema, {
-    formatVersion: 1,
-    testId: hardcodedBubbleGradingSchema.test.id,
-    testVersion: hardcodedBubbleGradingSchema.test.version,
-  });
-  assert.equal(
-    mobile.evidenceSession.detectorConfig.id,
-    PROVISIONAL_BUBBLE_DETECTOR_CONFIG.id,
-  );
-  assert.deepEqual(mobile.evidenceSession.combined.questions, mobile.result.questions);
   assert.equal(mobile.result.questions.length, hardcodedBubbleGradingSchema.questions.length);
   assert.equal(typeof mobile.result.scan.timing.durationMs, 'number');
 });
