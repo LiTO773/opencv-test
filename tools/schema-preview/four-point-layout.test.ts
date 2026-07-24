@@ -72,6 +72,14 @@ test('selects the coherent page markers when an inward QR square has a better lo
 
   assert.ok(selected);
   assert.equal(selected.markers[1], actualTopRight.marker);
+  assert.ok(selected.cropQuadrilateral[0].x < 40);
+  assert.ok(selected.cropQuadrilateral[0].y < 40);
+  assert.ok(selected.cropQuadrilateral[1].x > 260);
+  assert.ok(selected.cropQuadrilateral[1].y < 40);
+  assert.ok(selected.cropQuadrilateral[2].x > 260);
+  assert.ok(selected.cropQuadrilateral[2].y > 360);
+  assert.ok(selected.cropQuadrilateral[3].x < 40);
+  assert.ok(selected.cropQuadrilateral[3].y > 360);
 });
 
 test('rejects candidate combinations that cannot form a portrait page', () => {
@@ -84,4 +92,3 @@ test('rejects candidate combinations that cannot form a portrait page', () => {
 
   assert.equal(selectBestMarkerLayout(candidates, regions), null);
 });
-

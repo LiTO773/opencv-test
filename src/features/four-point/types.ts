@@ -1,5 +1,3 @@
-import type { MobileGradingOutcome } from '@/features/bubble-grading/mobile-bubble-grading';
-
 export type Point2D = {
   x: number;
   y: number;
@@ -74,10 +72,7 @@ export type QrMetadata = {
 };
 
 export type FourPointScan = {
+  uri: string;
   width: number;
   height: number;
-  qr: QrMetadata | null;
-  studentId: string | null;
-  grading: MobileGradingOutcome;
-  pipelineTimings: CapturePipelineTimings;
 };

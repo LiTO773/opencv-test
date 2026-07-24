@@ -7,6 +7,7 @@ import type {
 } from '@/features/four-point/types';
 
 const A4_WIDTH_TO_HEIGHT = 210 / 297;
+const MARKER_MARGIN_MULTIPLIER = 0.85;
 
 export type MarkerCandidate = {
   marker: MarkerMatch;
@@ -52,18 +53,33 @@ function isConvexQuadrilateral(points: Quadrilateral) {
   return true;
 }
 
-function markerFreeCropQuadrilateral(markers: CompleteMarkerMatches): Quadrilateral {
+function markerInclusiveCropQuadrilateral(markers: CompleteMarkerMatches): Quadrilateral {
   'worklet';
   const [topLeft, topRight, bottomRight, bottomLeft] = markers;
-
-  // Marker corners are ordered top-left, top-right, bottom-right, bottom-left.
-  // These inward-facing corners exclude both marker columns from the crop.
-  return [
-    topLeft.corners[1],
-    topRight.corners[0],
-    bottomRight.corners[3],
-    bottomLeft.corners[2],
+  const outerCorners: Quadrilateral = [
+    topLeft.corners[0],
+    topRight.corners[1],
+    bottomRight.corners[2],
+    bottomLeft.corners[3],
   ];
+  const pageCenter = markers.reduce(
+    (center, marker) => ({
+      x: center.x + marker.center.x / markers.length,
+      y: center.y + marker.center.y / markers.length,
+    }),
+    { x: 0, y: 0 },
+  );
+
+  return outerCorners.map((corner, index) => {
+    const directionX = corner.x - pageCenter.x;
+    const directionY = corner.y - pageCenter.y;
+    const directionLength = Math.max(1, Math.hypot(directionX, directionY));
+    const margin = markers[index].size * MARKER_MARGIN_MULTIPLIER;
+    return {
+      x: corner.x + (directionX / directionLength) * margin,
+      y: corner.y + (directionY / directionLength) * margin,
+    };
+  }) as Quadrilateral;
 }
 
 function layoutMeasurements(markers: CompleteMarkerMatches, crop: Quadrilateral) {
@@ -155,7 +171,7 @@ function scoreLayout(
 ) {
   'worklet';
   const markers = candidates.map((candidate) => candidate.marker) as CompleteMarkerMatches;
-  const cropQuadrilateral = markerFreeCropQuadrilateral(markers);
+  const cropQuadrilateral = markerInclusiveCropQuadrilateral(markers);
   const measurements = layoutMeasurements(markers, cropQuadrilateral);
   if (!measurements) return null;
 

@@ -1,20 +1,14 @@
 # Real-time document detector
 
-A mobile-only Expo SDK 57 prototype that detects a marked A4 document directly in the live camera feed. It adapts the OpenCV pipeline from Łukasz Kurant's real-time document-detection article to the current VisionCamera 5 packages.
+A mobile-only Expo SDK 57 prototype that detects a four-marker A4 document directly in the live camera feed.
 
-Each valid page has three evenly spaced black squares in each vertical margin. Sampled preview frames are resized on the GPU, converted into an adaptive binary image, and searched for square contours. A page is considered ready only when six candidates form two aligned, evenly spaced triplets, the detected corners remain within a small movement tolerance for five analyzed frames, and a Laplacian-based score says the central answer area is sharp. The preview coordinates are never reused for the final crop. Once ready, the app captures a QHD still photograph, applies its physical orientation, and detects the six markers and sharpness again on that exact photograph. A failed final quality check automatically returns to scanning.
+Sampled preview frames are resized on the GPU, converted into an adaptive binary image, and searched for the four corner markers. After two valid detections, the app captures a QHD still photograph, applies its physical orientation, and detects the markers again on that exact photograph. A failed final detection automatically returns to scanning.
 
-The inward-facing corners of the four outer markers detected in the accepted still photograph create perspective- and rotation-corrected 875 × 1280 pixels. Those user-reviewed dimensions and their aspect ratio are shared by the perspective surface and the hardcoded grading schema. Any schema/image dimension mismatch is reported as a canonical-contract error. QR recognition inspects only the schema-declared upright and 180-degree regions, and an upside-down page is automatically rotated before grading. The camera preview remains active through final validation and recognition and pauses only after the complete structured result is ready. The mobile hot path no longer creates or retains a JPEG/base64 copy of the canonical crop.
+The outer-facing corners of those markers are expanded by 0.85 marker widths to form the crop boundary. The app perspective-corrects that region into a 1050 × 1485 JPEG, so the result contains every marker plus a scan-like exterior margin. The result screen displays the exact generated JPEG and opens the native share sheet for saving or sending it.
 
-The result screen grades the hardcoded schema by exact selected-set equality,
-keeps uncertain points pending, provides question-by-question decisions, and exposes
-an expandable technical diagnostic record that is collapsed by default. See
-[`PHASE_08_PROTOTYPE_REVIEW.md`](./PHASE_08_PROTOTYPE_REVIEW.md) for the
-provisional detector calibration workflow and final physical-iPhone checklist.
+The active mobile path does not decode the QR or run bubble analysis, grading, or grading diagnostics. Older grading experiments remain in the repository for reference and for the standalone workbenches below, but they are not imported by the app.
 
-The QR describes the individual sheet only. Bubble positions and the answer key use the shared schema contract in `src/features/bubble-grading/schema.ts`. All schema layout values use a top-left origin and pixels of the clean canonical crop; the app and OpenCV do not convert PDF units.
-
-## Preview a grading schema
+## Preview the legacy grading schema
 
 Put a clean 875 × 1280 shared scan at `tools/schema-preview/input.jpg`, edit the fixed TypeScript export in `tools/schema-preview/schema.ts`, and run:
 
@@ -34,7 +28,7 @@ platform-neutral bubble diagnostics to `tools/schema-preview/result.json`.
 
 Watch mode stays running and refreshes whenever `input.jpg` or `schema.ts` changes. Invalid schemas print every discovered problem with its schema path and remove stale `output.png` and `result.json`. The canonical dimensions are fixed at 875 × 1280; an input mismatch is rejected instead of resized.
 
-On devices with a torch, the glass flash control can illuminate the document while scanning. The torch is turned off during capture, recognition, and the result modal.
+On devices with a torch, the glass flash control can illuminate the document while scanning. The torch is turned off during capture, crop generation, and the result modal.
 
 All image processing stays on the device. There is no web target, server, upload, or browser fallback.
 
@@ -71,10 +65,10 @@ pnpm schema:test
 
 Static checks do not validate the native JSI/worklet boundary. Before production, test on representative iOS and Android hardware with varied page sizes, backgrounds, lighting, shadows, glare, and camera orientations. Active four-point marker thresholds and QR hierarchy filtering live in `src/features/four-point/four-point-detection.ts`; pure whole-page candidate scoring lives in `src/features/four-point/four-point-layout.ts`.
 
-## Live desktop pipeline visualizer
+## Legacy desktop pipeline visualizer
 
-The standalone Python workbench shows all twelve stages of the current scanner
-and answer-grading pipeline at once. It reads the TypeScript schema, canonical
+The standalone Python workbench shows all twelve stages of the earlier scanner
+and answer-grading experiment at once. It reads the TypeScript schema, canonical
 crop contract, and detector thresholds directly from this repository.
 
 ```bash

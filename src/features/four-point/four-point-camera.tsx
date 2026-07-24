@@ -3,6 +3,7 @@ import {
   AlphaType,
   ColorType,
   FilterMode,
+  ImageFormat,
   MipmapMode,
   PaintStyle,
   Skia,
@@ -12,6 +13,7 @@ import {
   type SkCanvas,
   type SkImage,
 } from '@shopify/react-native-skia';
+import { File, Paths } from 'expo-file-system';
 import { useCallback, useEffect, useMemo, useRef } from 'react';
 import { Platform, StyleSheet, useWindowDimensions } from 'react-native';
 import { useSharedValue } from 'react-native-reanimated';
@@ -24,30 +26,19 @@ import {
 } from 'react-native-vision-camera';
 import { useResizer } from 'react-native-vision-camera-resizer';
 import { SkiaCamera, type SkiaCameraRef } from 'react-native-vision-camera-skia';
-import { scheduleOnRN, type WorkletRuntime } from 'react-native-worklets';
+import { scheduleOnRN } from 'react-native-worklets';
 
-import { CANONICAL_CROP_CONTRACT } from '@/features/bubble-grading/canonical-crop-contract';
-import { hardcodedBubbleGradingSchema } from '@/features/bubble-grading/hardcoded-schema';
-import {
-  analyzeMobileBubbleGradingImageOnRuntime,
-} from '@/features/bubble-grading/mobile-bubble-grading';
 import {
   createMarkerRegions,
   detectFourPoints,
   detectFourPointsFromRgba,
   mapAnalysisToSource,
 } from '@/features/four-point/four-point-detection';
-import {
-  readQrMetadataInRegions,
-  readQrPayloadId,
-  type QrPixelRegion,
-} from '@/features/four-point/qr-reader';
 import type {
   FourPointAnalysis,
   FourPointScan,
   FourPointScanState,
   MarkerRegion,
-  QrMetadata,
   Quadrilateral,
 } from '@/features/four-point/types';
 
@@ -55,8 +46,8 @@ const ANALYSIS_WIDTH = 420;
 const DETECTION_INTERVAL_FRAMES = 2;
 const CONFIRMATION_FRAMES = 2;
 
-export const CANONICAL_CROP_WIDTH_PX = CANONICAL_CROP_CONTRACT.widthPx;
-export const CANONICAL_CROP_HEIGHT_PX = CANONICAL_CROP_CONTRACT.heightPx;
+const DOCUMENT_CROP_WIDTH_PX = 1050;
+const DOCUMENT_CROP_HEIGHT_PX = 1485;
 
 const guidePaint = Skia.Paint();
 guidePaint.setStyle(PaintStyle.Stroke);
@@ -81,7 +72,6 @@ markerPaint.setColor(Skia.Color('#22C55E'));
 
 type FourPointCameraProps = {
   device: NonNullable<ReturnType<typeof import('react-native-vision-camera').useCameraDevice>>;
-  gradingRuntime: WorkletRuntime;
   isActive: boolean;
   onCropCaptured: (scan: FourPointScan) => void;
   onMarkerCountChange: (count: number) => void;
@@ -139,66 +129,10 @@ function solveHomography(
   ];
 }
 
-function nowMilliseconds() {
-  return globalThis.performance?.now() ?? Date.now();
-}
-
-function roundedMilliseconds(value: number) {
-  return Number(value.toFixed(3));
-}
-
-function readCanonicalPixels(image: SkImage, width: number, height: number) {
-  const pixels = image.readPixels(0, 0, {
-    alphaType: AlphaType.Unpremul,
-    colorType: ColorType.RGBA_8888,
-    width,
-    height,
-  });
-  if (!pixels || pixels instanceof Float32Array) {
-    throw new Error('Não foi possível ler os píxeis da imagem canónica para classificação.');
-  }
-  const copy = new Uint8Array(pixels.byteLength);
-  copy.set(pixels);
-  return copy;
-}
-
-function rotateRgba180InPlace(pixels: Uint8Array) {
-  for (let left = 0, right = pixels.length - 4; left < right; left += 4, right -= 4) {
-    for (let channel = 0; channel < 4; channel += 1) {
-      const temporary = pixels[left + channel];
-      pixels[left + channel] = pixels[right + channel];
-      pixels[right + channel] = temporary;
-    }
-  }
-}
-
-function expandedQrRegion(region: QrPixelRegion, padding: number): QrPixelRegion {
-  return {
-    x: region.x - padding,
-    y: region.y - padding,
-    width: region.width + padding * 2,
-    height: region.height + padding * 2,
-  };
-}
-
-function qrSearchRegions(width: number, height: number): QrPixelRegion[] {
-  const declared = hardcodedBubbleGradingSchema.qrRegionPx;
-  const opposite = {
-    x: width - declared.x - declared.width,
-    y: height - declared.y - declared.height,
-    width: declared.width,
-    height: declared.height,
-  };
-  return [expandedQrRegion(declared, 12), expandedQrRegion(opposite, 12)];
-}
-
-type CanonicalScanPixels = {
+type DocumentCrop = {
+  uri: string;
   width: number;
   height: number;
-  rgba: Uint8Array;
-  qr: QrMetadata | null;
-  perspectiveCorrectionMs: number;
-  qrDecodeMs: number;
 };
 
 function normalizeSnapshot(
@@ -206,8 +140,7 @@ function normalizeSnapshot(
   analysisQuadrilateral: Quadrilateral,
   analysisWidth: number,
   analysisHeight: number,
-): CanonicalScanPixels | null {
-  const normalizationStartedAt = nowMilliseconds();
+): DocumentCrop | null {
   const source = analysisQuadrilateral.map((point) =>
     mapAnalysisToSource(
       point,
@@ -217,8 +150,8 @@ function normalizeSnapshot(
       snapshot.height(),
     ),
   ) as Quadrilateral;
-  const outputWidth = CANONICAL_CROP_WIDTH_PX;
-  const outputHeight = CANONICAL_CROP_HEIGHT_PX;
+  const outputWidth = DOCUMENT_CROP_WIDTH_PX;
+  const outputHeight = DOCUMENT_CROP_HEIGHT_PX;
   const destination: Quadrilateral = [
     { x: 0, y: 0 },
     { x: outputWidth, y: 0 },
@@ -243,32 +176,13 @@ function normalizeSnapshot(
     const rasterImage = normalizedSnapshot.makeNonTextureImage();
     const normalizedImage = rasterImage ?? normalizedSnapshot;
     try {
-      const rgba = readCanonicalPixels(normalizedImage, outputWidth, outputHeight);
-      const qrStartedAt = nowMilliseconds();
-      const detectedQr = readQrMetadataInRegions(
-        new Uint8ClampedArray(rgba.buffer, rgba.byteOffset, rgba.byteLength),
-        outputWidth,
-        outputHeight,
-        qrSearchRegions(outputWidth, outputHeight),
-      );
-      const qrDecodeMs = roundedMilliseconds(nowMilliseconds() - qrStartedAt);
-      let qr = detectedQr;
-      if (detectedQr?.orientation === 'upside-down') {
-        rotateRgba180InPlace(rgba);
-        qr = {
-          ...detectedQr,
-          orientation: 'upright',
-          rotationApplied: 180,
-        };
-      }
-
+      const cropFile = new File(Paths.cache, `document-crop-${Date.now()}.jpg`);
+      cropFile.create({ overwrite: true });
+      cropFile.write(normalizedImage.encodeToBytes(ImageFormat.JPEG, 95));
       return {
+        uri: cropFile.uri,
         width: outputWidth,
         height: outputHeight,
-        rgba,
-        qr,
-        perspectiveCorrectionMs: roundedMilliseconds(qrStartedAt - normalizationStartedAt),
-        qrDecodeMs,
       };
     } finally {
       if (rasterImage && rasterImage !== normalizedSnapshot) rasterImage.dispose();
@@ -408,7 +322,6 @@ function analyzeAndNormalizeCapturedImage(
   analysisHeight: number,
   regions: readonly MarkerRegion[],
 ) {
-  const detectionStartedAt = nowMilliseconds();
   const analysisBuffer = makeStillAnalysisBuffer(image, analysisWidth, analysisHeight);
   if (!analysisBuffer) {
     throw new Error('Não foi possível preparar a fotografia final para análise.');
@@ -419,7 +332,6 @@ function analyzeAndNormalizeCapturedImage(
     analysisHeight,
     regions,
   );
-  const finalDetectionMs = roundedMilliseconds(nowMilliseconds() - detectionStartedAt);
   if (!analysis.cropQuadrilateral) {
     if (analysis.matchedCount < 4) {
       throw new Error(
@@ -430,14 +342,14 @@ function analyzeAndNormalizeCapturedImage(
       'Os quatro marcadores da fotografia final já não formam uma folha vertical válida. Enquadre novamente.',
     );
   }
-  const scan = normalizeSnapshot(
+  const crop = normalizeSnapshot(
     image,
     analysis.cropQuadrilateral,
     analysisWidth,
     analysisHeight,
   );
-  if (!scan) throw new Error('Não foi possível corrigir a perspetiva da fotografia.');
-  return { ...scan, finalDetectionMs };
+  if (!crop) throw new Error('Não foi possível corrigir a perspetiva da fotografia.');
+  return crop;
 }
 
 function drawQuadrilateral(
@@ -522,7 +434,6 @@ const emptyAnalysis: FourPointAnalysis = {
 
 export function FourPointCamera({
   device,
-  gradingRuntime,
   isActive,
   onCropCaptured,
   onMarkerCountChange,
@@ -557,8 +468,6 @@ export function FourPointCamera({
     pixelLayout: 'interleaved',
   });
   const frameCounter = useSharedValue(0);
-  const renderedFrameCount = useSharedValue(0);
-  const captureStartedFrameCount = useSharedValue(0);
   const consecutiveMatches = useSharedValue(0);
   const lastAnalysis = useSharedValue<FourPointAnalysis>(emptyAnalysis);
   const lastReportedMarkerCount = useSharedValue(0);
@@ -585,61 +494,22 @@ export function FourPointCamera({
   const captureFinalPhoto = useCallback(async () => {
     let photo: Photo | null = null;
     let decodedPhoto: Awaited<ReturnType<typeof makeSkiaImageFromPhoto>> | null = null;
-    const pipelineStartedAt = nowMilliseconds();
     try {
-      const captureStartedAt = nowMilliseconds();
       photo = await photoOutput.capturePhoto(
         { enableShutterSound: false, flashMode: 'off' },
         {},
       );
-      const capturePhotoMs = roundedMilliseconds(nowMilliseconds() - captureStartedAt);
       lastReportedScanState.value = 'processing';
       onScanStateChange('processing');
 
-      const decodeStartedAt = nowMilliseconds();
       decodedPhoto = await makeSkiaImageFromPhoto(photo);
-      const decodePhotoMs = roundedMilliseconds(nowMilliseconds() - decodeStartedAt);
-      const canonical = analyzeAndNormalizeCapturedImage(
+      const crop = analyzeAndNormalizeCapturedImage(
         decodedPhoto.image,
         ANALYSIS_WIDTH,
         analysisHeight,
         regions,
       );
-      const gradingStartedAt = nowMilliseconds();
-      const grading = await analyzeMobileBubbleGradingImageOnRuntime(
-        gradingRuntime,
-        canonical.rgba,
-        canonical.width,
-        canonical.height,
-        canonical.qr,
-      );
-      const gradingMs = roundedMilliseconds(nowMilliseconds() - gradingStartedAt);
-      const totalMs = roundedMilliseconds(nowMilliseconds() - pipelineStartedAt);
-      const previewFramesDuringPipeline = Math.max(
-        0,
-        renderedFrameCount.value - captureStartedFrameCount.value,
-      );
-      onCropCaptured({
-        width: canonical.width,
-        height: canonical.height,
-        qr: canonical.qr,
-        studentId: canonical.qr ? readQrPayloadId(canonical.qr, 'studentId') : null,
-        grading,
-        pipelineTimings: {
-          capturePhotoMs,
-          decodePhotoMs,
-          finalDetectionMs: canonical.finalDetectionMs,
-          perspectiveCorrectionMs: canonical.perspectiveCorrectionMs,
-          qrDecodeMs: canonical.qrDecodeMs,
-          gradingMs,
-          previewFramesDuringPipeline,
-          previewFpsDuringPipeline:
-            totalMs === 0
-              ? 0
-              : roundedMilliseconds((previewFramesDuringPipeline * 1000) / totalMs),
-          totalMs,
-        },
-      });
+      onCropCaptured(crop);
     } catch (caught) {
       didCapture.value = false;
       consecutiveMatches.value = 0;
@@ -658,10 +528,8 @@ export function FourPointCamera({
     }
   }, [
     analysisHeight,
-    captureStartedFrameCount,
     consecutiveMatches,
     didCapture,
-    gradingRuntime,
     lastAnalysis,
     lastReportedMarkerCount,
     lastReportedScanState,
@@ -670,7 +538,6 @@ export function FourPointCamera({
     onProcessorError,
     onScanStateChange,
     photoOutput,
-    renderedFrameCount,
     regions,
   ]);
 
@@ -692,7 +559,6 @@ export function FourPointCamera({
       : never) => {
       'worklet';
       try {
-        renderedFrameCount.value += 1;
         frameCounter.value = (frameCounter.value + 1) % DETECTION_INTERVAL_FRAMES;
         if (!didCapture.value && frameCounter.value === 0 && resizerState.resizer) {
           const resizedFrame = resizerState.resizer.resize(frame);
@@ -750,7 +616,6 @@ export function FourPointCamera({
 
         if (shouldCapture) {
           didCapture.value = true;
-          captureStartedFrameCount.value = renderedFrameCount.value;
           lastReportedScanState.value = 'capturing';
           scheduleOnRN(reportScanState, 'capturing');
           scheduleOnRN(captureFinalPhoto);
@@ -782,7 +647,6 @@ export function FourPointCamera({
     },
     [
       analysisHeight,
-      captureStartedFrameCount,
       captureFinalPhoto,
       consecutiveMatches,
       didCapture,
@@ -793,7 +657,6 @@ export function FourPointCamera({
       lastReportedScanState,
       onProcessorError,
       regions,
-      renderedFrameCount,
       reportMarkerCount,
       reportScanState,
       resizerState.resizer,
